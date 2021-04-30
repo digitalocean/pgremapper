@@ -1,0 +1,864 @@
+// Copyright 2021 DigitalOcean
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"math"
+	"math/rand"
+	"os"
+	"os/exec"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/pkg/errors"
+	"github.com/spf13/cobra"
+)
+
+var gitCommit string
+
+var (
+	concurrency int
+	yes         bool
+	// M represents the state of upmap items, based on current state plus
+	// whatever modifications have been made.
+	M *mappingState
+
+	rootCmd = &cobra.Command{
+		Use:   "pgremapper",
+		Short: "Use the upmap to manipulate PG mappings (and thus scheduled backfill)",
+		Long: `Use the upmap to manipulate PG mappings (and thus scheduled backfill)
+
+For any commands that take an osdspec, one of the following can be given:
+* An OSD ID (e.g. '54').
+* A CRUSH bucket (e.g. 'bucket:rack1' or 'bucket:host04').
+`,
+	}
+
+	balanceBucketCmd = &cobra.Command{
+		Use:   "balance-bucket <bucket>",
+		Short: "Add/modify upmap entries to balance the PG count of OSDs in the given CRUSH bucket.",
+		Long: `Add/modify upmap entries to balance the PG count of OSDs in the given CRUSH bucket.
+
+This is essentially a small, targeted version of Ceph's own upmap balancer,
+useful for cases where general enablement of the balancer either isn't possible
+or is undesirable. The given CRUSH bucket must directly contain OSDs.
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return errors.New("a bucket must be specified")
+			}
+
+			if _, err := getOsdsForBucket(args[0]); err != nil {
+				return errors.Wrapf(err, "error validating '%s' as a bucket containing OSDs", args[0])
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			M = mustGetCurrentMappingState()
+			osds := mustGetOsdsForBucket(args[0])
+
+			maxBackfills := mustGetInt(cmd, "max-backfills")
+			targetSpread := mustGetInt(cmd, "target-spread")
+
+			calcPgMappingsToBalanceOsds(osds, maxBackfills, targetSpread)
+			if !confirmProceed() {
+				return
+			}
+
+			M.apply()
+		},
+	}
+
+	cancelBackfillCmd = &cobra.Command{
+		Use:   "cancel-backfill",
+		Short: "Add Ceph upmap entries to cancel out pending backfill",
+		Long: `Add Ceph upmap entries to cancel out pending backfill.
+
+This command iterates the list of PGs in a backfill state, creating, modifying,
+or removing upmap exception table entries to point the PGs back to where they
+are located now (i.e. makes the 'up' set the same as the 'acting' set). This
+essentially reverts whatever decision led to this backfill (i.e. CRUSH change,
+OSD reweight, or another upmap entry) and leaves the Ceph cluster with no (or
+very little) remapped PGs (there are cases where Ceph disallows such remapping
+due to violation of CRUSH rules).
+
+Notably, 'pgremapper' knows how to reconstruct the acting set for a degraded
+backfill (provided that complete copies exist for all indexes of that acting
+set), which can allow one to convert a 'degraded+backfill{ing,_wait}' into
+'degraded+recover{y,_wait}', at the cost of losing whatever backfill progress
+has been made so far.
+`,
+		Run: func(cmd *cobra.Command, _ []string) {
+			excludeBackfilling, err := cmd.Flags().GetBool("exclude-backfilling")
+			if err != nil {
+				panic(errors.WithStack(err))
+			}
+
+			excludedOsds := mustGetOsdSpecSliceMap(cmd, "exclude-osds")
+			includedOsds := mustGetOsdSpecSliceMap(cmd, "include-osds")
+			pgsIncludingOsds := mustGetOsdSpecSliceMap(cmd, "pgs-including")
+
+			M = mustGetCurrentMappingState()
+			calcPgMappingsToUndoBackfill(excludeBackfilling, excludedOsds, includedOsds, pgsIncludingOsds)
+			if !confirmProceed() {
+				return
+			}
+
+			M.apply()
+		},
+	}
+
+	drainCmd = &cobra.Command{
+		Use:   "drain <source osd ID>",
+		Short: "Drain PGs from the given OSD to the target OSDs.",
+		Long: `Drain PGs from the given OSD to the target OSDs.
+
+Remap PGs off of the given source OSD, up to the given maximum number of
+scheduled backfills. No attempt is made to balance the fullness of the target
+OSDs; rather, the least busy target OSDs and PGs will be selected.
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return errors.New("a source OSD must be specified")
+			}
+
+			if _, err := strconv.Atoi(args[0]); err != nil {
+				return err
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			M = mustGetCurrentMappingState()
+
+			sourceOsd, _ := strconv.Atoi(args[0])
+			allowMovementAcrossCrushType := mustGetString(cmd, "allow-movement-across")
+			mustParseMaxBackfillReservations(cmd)
+			mustParseMaxSourceBackfills(cmd)
+			targetOsds := mustGetOsdSpecSlice(cmd, "target-osds")
+
+			tree := cachedOsdTree()
+			sourceOsdNode, ok := tree.IDToNode[sourceOsd]
+			if !ok || sourceOsdNode.Type != "osd" {
+				panic(fmt.Errorf("source OSD %d doesn't exist", sourceOsd))
+			}
+
+			for _, targetOsd := range targetOsds {
+				targetOsdNode, ok := tree.IDToNode[targetOsd]
+				if !ok || targetOsdNode.Type != "osd" {
+					panic(fmt.Errorf("target OSD %d doesn't exist", targetOsd))
+				}
+			}
+
+			calcPgMappingsToDrainOsd(
+				allowMovementAcrossCrushType,
+				sourceOsd,
+				targetOsds,
+			)
+			if !confirmProceed() {
+				return
+			}
+
+			M.apply()
+		},
+	}
+
+	undoUpmapsCmd = &cobra.Command{
+		Use:   "undo-upmaps [osd IDs...]",
+		Short: "Undo upmap entries for the given source/target OSDs",
+		Long: `Undo upmap entries for the given source/target OSDs.
+
+Given a list of OSDs, remove (or modify) upmap items such that the OSDs become
+the source (or target if --target is specified) of backfill operations (i.e.
+they are currently the "To" ("From") of the upmap items) up to the backfill
+limits specified. Backfill is spread across target and primary OSDs in a
+best-effort manor.
+
+This is useful for cases where the upmap rebalancer won't do this for us, e.g.,
+performing a swap-bucket where we want the source OSDs to totally drain (vs.
+balance with the rest of the cluster). It also achieves a much higher level of
+concurrency than the balancer generally will.
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) < 1 {
+				return errors.New("at least one OSD must be specified")
+			}
+
+			for _, arg := range args {
+				if _, err := parseOsdSpec(arg); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			M = mustGetCurrentMappingState()
+
+			osds := make([]int, 0, len(args))
+			for _, arg := range args {
+				osdSpecOsds := mustParseOsdSpec(arg)
+				osds = append(osds, osdSpecOsds...)
+			}
+
+			// Randomize OSD list for fairness across multiple
+			// runs.
+			rand.Seed(time.Now().UnixNano())
+			rand.Shuffle(len(osds), func(i, j int) { osds[i], osds[j] = osds[j], osds[i] })
+
+			target := mustGetBool(cmd, "target")
+			mustParseMaxBackfillReservations(cmd)
+			mustParseMaxSourceBackfills(cmd)
+
+			calcPgMappingsToUndoUpmaps(osds, target)
+			if !confirmProceed() {
+				return
+			}
+
+			M.apply()
+		},
+	}
+
+	remapCmd = &cobra.Command{
+		Use:   "remap <pg ID> <source osd ID> <target osd ID>",
+		Short: "Remap the given PG from the source OSD to the target OSD.",
+		Long: `Remap the given PG from the source OSD to the target OSD.
+
+Modify the upmap exception table with the requested mapping. Like other
+subcommands, this takes into account any existing mappings for this PG, and is
+thus safer and more convenient to use than 'ceph osd pg-upmap-items' directly.
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 3 {
+				return errors.New("missing or extra args")
+			}
+
+			for i := 1; i < 3; i++ {
+				if _, err := strconv.Atoi(args[i]); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			M = mustGetCurrentMappingState()
+
+			pgID := args[0]
+			sourceOsd, _ := strconv.Atoi(args[1])
+			targetOsd, _ := strconv.Atoi(args[2])
+
+			M.remap(pgID, sourceOsd, targetOsd)
+
+			if !confirmProceed() {
+				return
+			}
+
+			M.apply()
+		},
+	}
+
+	versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Long:  "Print version information",
+
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("git sha %s\n", gitCommit)
+		},
+	}
+)
+
+func mustGetBool(cmd *cobra.Command, arg string) bool {
+	ret, err := cmd.Flags().GetBool(arg)
+	if err != nil {
+		panic(errors.WithStack(err))
+	}
+	return ret
+}
+
+func mustGetInt(cmd *cobra.Command, arg string) int {
+	ret, err := cmd.Flags().GetInt(arg)
+	if err != nil {
+		panic(errors.WithStack(err))
+	}
+	return ret
+}
+
+func mustGetString(cmd *cobra.Command, arg string) string {
+	ret, err := cmd.Flags().GetString(arg)
+	if err != nil {
+		panic(errors.WithStack(err))
+	}
+	return ret
+}
+
+func mustGetStringSlice(cmd *cobra.Command, arg string) []string {
+	ret, err := cmd.Flags().GetStringSlice(arg)
+	if err != nil {
+		panic(errors.WithStack(err))
+	}
+	return ret
+}
+
+func mustGetOsdSpecSlice(cmd *cobra.Command, arg string) []int {
+	strings := mustGetStringSlice(cmd, arg)
+
+	var osds []int
+	for _, s := range strings {
+		osdSpecOsds := mustParseOsdSpec(s)
+		osds = append(osds, osdSpecOsds...)
+	}
+	return osds
+}
+
+func mustGetOsdSpecSliceMap(cmd *cobra.Command, arg string) map[int]struct{} {
+	list := mustGetOsdSpecSlice(cmd, arg)
+
+	ret := make(map[int]struct{})
+	for _, v := range list {
+		ret[v] = struct{}{}
+	}
+
+	return ret
+}
+
+func mustParseOsdSpec(s string) []int {
+	osds, err := parseOsdSpec(s)
+	if err != nil {
+		panic(errors.WithStack(err))
+	}
+	return osds
+}
+
+func parseOsdSpec(s string) ([]int, error) {
+	errResponse := func(s string) ([]int, error) {
+		return nil, errors.New(fmt.Sprintf("'%s' is not a valid osdspec - see root command --help", s))
+	}
+
+	osd, err := strconv.Atoi(s)
+	if err == nil {
+		return []int{osd}, nil
+	}
+
+	spl := strings.SplitN(s, ":", 2)
+	if len(spl) != 2 {
+		return errResponse(s)
+	}
+
+	if spl[0] != "bucket" {
+		return errResponse(s)
+	}
+
+	osds, err := getOsdsForBucket(spl[1])
+	if err != nil {
+		return nil, err
+	}
+
+	return osds, nil
+}
+
+func mustParseMaxSourceBackfills(cmd *cobra.Command) {
+	max := mustGetInt(cmd, "max-source-backfills")
+	M.bs.maxBackfillsFrom = max
+}
+
+func mustParseMaxBackfillReservations(cmd *cobra.Command) {
+	strs := mustGetStringSlice(cmd, "max-backfill-reservations")
+
+	if len(strs) >= 1 {
+		max, err := strconv.Atoi(strs[0])
+		if err != nil {
+			panic(errors.WithStack(err))
+		}
+		M.bs.maxBackfillReservations = max
+
+		for _, s := range strs[1:] {
+			spl := strings.Split(s, ":")
+			if len(spl) < 2 {
+				panic(errors.WithStack(errors.New(fmt.Sprintf("'%s' is not a valid max-backfill-reservation specifier", s))))
+			}
+
+			max, err := strconv.Atoi(spl[len(spl)-1])
+			if err != nil {
+				panic(errors.WithStack(err))
+			}
+
+			osds := mustParseOsdSpec(s[0:strings.LastIndex(s, ":")])
+			for _, osd := range osds {
+				M.bs.osd(osd).maxBackfillReservations = max
+			}
+		}
+	}
+}
+
+func init() {
+	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 5, "number of commands to issue in parallel")
+	rootCmd.PersistentFlags().BoolVar(&yes, "yes", false, "skip confirmations and dry-run output")
+
+	balanceBucketCmd.Flags().Int("max-backfills", 5, "max number of backfills to schedule for this bucket, including pre-existing ones")
+	balanceBucketCmd.Flags().Int("target-spread", 1, "target difference between the fullest and emptiest OSD in the bucket")
+	rootCmd.AddCommand(balanceBucketCmd)
+
+	cancelBackfillCmd.Flags().Bool("exclude-backfilling", false, "don't interrupt already-started backfills")
+	cancelBackfillCmd.Flags().StringSlice("exclude-osds", []string{}, "list of osdspecs that are backfill sources or targets which will be excluded from backfill cancellation")
+	cancelBackfillCmd.Flags().StringSlice("include-osds", []string{}, "list of osdspecs that are backfill sources or targets which will be included in backfill cancellation")
+	cancelBackfillCmd.Flags().StringSlice("pgs-including", []string{}, "only PGs that include the given OSDs in their up or acting set will have their backfill canceled, whether or not the given OSDs are backfill sources or targets in those PGs")
+	rootCmd.AddCommand(cancelBackfillCmd)
+
+	drainCmd.Flags().String("allow-movement-across", "", "the lowest CRUSH bucket type across which shards/replicas of a PG may move; '' (empty) means that shards/replicas must stay within their current direct bucket (IMPORTANT: this is not validated against your CRUSH rules, so make sure you set it and the target OSDs correctly!)")
+	drainCmd.Flags().StringSlice("max-backfill-reservations", []string{}, "limit number of backfill reservations made; format: \"default max[,osdspec:max]\", e.g., \"5,bucket:data10:10\"")
+	drainCmd.Flags().Int("max-source-backfills", 1, "max number of backfills to schedule per source OSD, including pre-existing ones")
+	drainCmd.Flags().StringSlice("target-osds", []string{}, "list of OSDs that will be used as the target of remappings")
+	rootCmd.AddCommand(drainCmd)
+
+	undoUpmapsCmd.Flags().StringSlice("max-backfill-reservations", []string{}, "limit number of backfill reservations made; format: \"default max[,osdspec:max]\", e.g., \"5,bucket:data10:10\"")
+	undoUpmapsCmd.Flags().Int("max-source-backfills", 1, "max number of backfills to schedule per source OSD, including pre-existing ones")
+	undoUpmapsCmd.Flags().Bool("target", false, "the given OSDs are backfill targets rather than sources")
+	rootCmd.AddCommand(undoUpmapsCmd)
+
+	rootCmd.AddCommand(remapCmd)
+
+	rootCmd.AddCommand(versionCmd)
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Printf("%+v\n", err)
+		os.Exit(1)
+	}
+}
+
+func getCephStatus() (*cephStatus, error) {
+	out, err := run("ceph", "status", "-f", "json")
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	status := cephStatus{}
+	if err := json.Unmarshal([]byte(out), &status); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return &status, nil
+}
+
+func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, includedOsds, pgsIncludingOsds map[int]struct{}) {
+	pgBriefs := pgDumpPgsBrief()
+
+	excluded := func(osd int) bool {
+		_, ok := excludedOsds[osd]
+		return ok
+	}
+
+	// Included is true if the flag isn't supplied
+	// or if it is supplied and the OSD is in it
+	included := func(osd int) bool {
+		_, ok := includedOsds[osd]
+		return len(includedOsds) == 0 || ok
+	}
+
+	// Run these concurrently in case they need to go to pgQuery, which is
+	// quite slow.
+	wg := sync.WaitGroup{}
+	ch := make(chan *pgBriefItem)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			for pgb := range ch {
+				id := pgb.PgID
+				up := pgb.Up
+				acting := pgb.Acting
+
+				if !strings.Contains(pgb.State, "backfill") {
+					continue
+				}
+				if excludeBackfilling && strings.Contains(pgb.State, "backfilling") {
+					continue
+				}
+				if len(up) != len(acting) {
+					continue
+				}
+
+				// Check if we need to reconstruct the original
+				// acting set in the case of a degraded PG.
+				for _, osd := range acting {
+					if osd == invalidOSD {
+						// Reconstruct the original
+						// acting set via a PG query.
+						pqo := pgQuery(id)
+						acting = pqo.getCompletePeers()
+						reorderUpToMatchActing(up, acting)
+						break
+					}
+				}
+
+				if len(pgsIncludingOsds) > 0 {
+					include := false
+					for _, osd := range append(acting, up...) {
+						if _, ok := pgsIncludingOsds[osd]; ok {
+							include = true
+							break
+						}
+					}
+					if !include {
+						continue
+					}
+				}
+
+				// Calculate acting set difference and remap to
+				// avoid any ensuing backfill.
+				for i := range acting {
+					if up[i] != acting[i] && acting[i] != invalidOSD {
+						if excluded(up[i]) || excluded(acting[i]) {
+							continue
+						}
+
+						// We'll allow this OSD to be
+						// acted on if this PG is the
+						// source _or_ target
+						if !(included(up[i]) || included(acting[i])) {
+							continue
+						}
+
+						M.remap(id, up[i], acting[i])
+					}
+				}
+			}
+
+			wg.Done()
+		}()
+	}
+
+	for _, pgb := range pgBriefs {
+		ch <- pgb
+	}
+
+	close(ch)
+	wg.Wait()
+}
+
+func calcPgMappingsToDrainOsd(
+	allowMovementAcrossCrushType string,
+	sourceOsd int,
+	targetOsds []int,
+) {
+	candidateMappings := getCandidateMappings(
+		allowMovementAcrossCrushType,
+		sourceOsd,
+		targetOsds,
+	)
+
+	for len(candidateMappings) > 0 {
+		pgid, ok := remapLeastBusyPg(candidateMappings)
+		if !ok {
+			break
+		}
+
+		// Since this PG has now been remapped, remove it from the candidates.
+		newCandidates := []pgMapping{}
+		for _, m := range candidateMappings {
+			if m.pgid == pgid {
+				continue
+			}
+			newCandidates = append(newCandidates, m)
+		}
+		candidateMappings = newCandidates
+	}
+}
+
+func getCandidateMappings(
+	allowMovementAcrossCrushType string,
+	sourceOsd int,
+	targetOsds []int,
+) []pgMapping {
+	pgs := getUpPGsForOsds([]int{sourceOsd})
+	candidateMappings := []pgMapping{}
+	for _, pg := range pgs[sourceOsd] {
+		for _, targetOsd := range targetOsds {
+			if !isCandidateMapping(
+				allowMovementAcrossCrushType,
+				sourceOsd,
+				targetOsd,
+				pg,
+			) {
+				continue
+			}
+			candidateMappings = append(candidateMappings, pgMapping{
+				pgid: pg.PgID,
+				mp: mapping{
+					From: sourceOsd,
+					To:   targetOsd,
+				},
+			})
+		}
+	}
+	return candidateMappings
+}
+
+func isCandidateMapping(
+	allowMovementAcrossCrushType string,
+	sourceOsd int,
+	targetOsd int,
+	pg *pgBriefItem,
+) bool {
+	if targetOsd == sourceOsd {
+		return false
+	}
+
+	tree := cachedOsdTree()
+	sourceOsdNode := tree.IDToNode[sourceOsd]
+	targetOsdNode := tree.IDToNode[targetOsd]
+
+	if allowMovementAcrossCrushType == "" {
+		// Data movements must stay within the source's direct CRUSH
+		// bucket.
+		if targetOsdNode.Parent != sourceOsdNode.Parent {
+			return false
+		}
+		return true
+	}
+
+	// Data movements are allowed between buckets of type
+	// allowMovementAcrossCrushType as long as they share the next level up
+	// in the hierarchy. However, no other OSDs in this PG may be in the
+	// same bucket of the target's crushShardBucket.
+	sourceCrushParentBucket := sourceOsdNode.mustGetNearestParentOfType(allowMovementAcrossCrushType)
+	targetCrushParentBucket := targetOsdNode.mustGetNearestParentOfType(allowMovementAcrossCrushType)
+	if sourceCrushParentBucket.Parent != targetCrushParentBucket.Parent {
+		return false
+	}
+	for _, pgUpOsd := range pg.Up {
+		if pgUpOsd == sourceOsd {
+			continue
+		}
+
+		pgUpOsdNode := tree.IDToNode[pgUpOsd]
+		pgUpOsdCrushParentBucket := pgUpOsdNode.mustGetNearestParentOfType(allowMovementAcrossCrushType)
+		if targetCrushParentBucket == pgUpOsdCrushParentBucket {
+			// Moving to this target would put multiple shards in
+			// the same bucket, which isn't valid.
+			return false
+		}
+	}
+	return true
+}
+
+func calcPgMappingsToUndoUpmaps(osds []int, osdsAreTargets bool) {
+	// For fairness, iterate the osds, adding one backfill at a time to
+	// each candidate, until we don't add any new backfills.
+	somethingChanged := true
+	for somethingChanged {
+		somethingChanged = false
+
+		for _, osd := range osds {
+			var candidateMappings []pgMapping
+			if osdsAreTargets {
+				candidateMappings = M.getMappings(withFrom(osd))
+			} else {
+				candidateMappings = M.getMappings(withTo(osd))
+			}
+
+			// Since we pass these mappings in as candidates for
+			// action, reverse the From and To (since we want to
+			// undo the associated upmap).
+			for i := range candidateMappings {
+				mp := &candidateMappings[i].mp
+				mp.From, mp.To = mp.To, mp.From
+			}
+
+			_, ok := remapLeastBusyPg(candidateMappings)
+			if !ok {
+				continue
+			}
+			somethingChanged = true
+		}
+	}
+}
+
+func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
+	var (
+		found       bool
+		bestScore   = int(math.MaxInt32)
+		bestMapping pgMapping
+	)
+	// Look for a candidate OSD to remap to that has the lowest reservation
+	// score. We consider the remote reservation count (the count of
+	// backfills in which this OSD is the target) to be more important than
+	// the local reservation count (the count of backfills for which this
+	// OSD is primary), and thus apply a weight to it.
+	for _, m := range candidateMappings {
+		if !M.bs.hasRoomForRemap(m.pgid, m.mp.From, m.mp.To) {
+			continue
+		}
+
+		obs := M.bs.osd(m.mp.To)
+		score := obs.remoteReservations*10 + obs.localReservations
+		if score < bestScore {
+			found = true
+			bestScore = score
+			bestMapping = m
+		}
+	}
+	if !found {
+		return "", false
+	}
+
+	M.remap(bestMapping.pgid, bestMapping.mp.From, bestMapping.mp.To)
+
+	return bestMapping.pgid, true
+}
+
+func calcPgMappingsToBalanceOsds(osds []int, maxBackfills, targetSpread int) {
+	sort.Slice(osds, func(i, j int) bool { return osds[i] < osds[j] })
+
+	osdUpPGs := getUpPGsForOsds(osds)
+
+	osdDumpOut := osdDump()
+	for _, o := range osdDumpOut.Osds {
+		if pgs, ok := osdUpPGs[o.Osd]; ok && o.In == 0 {
+			if len(pgs) != 0 {
+				panic(fmt.Sprintf("osd %d is 'out' but has PGs in up set", o.Osd))
+			}
+			// This OSD is 'out' - exclude it from consideration.
+			delete(osdUpPGs, o.Osd)
+			continue
+		}
+	}
+
+	backfillsInSet := 0
+	for _, osd := range osds {
+		backfillsInSet += M.bs.osd(osd).backfillsFrom
+	}
+
+	for backfillsInSet < maxBackfills {
+		var (
+			lowestOsd, highestOsd int
+			lowestLen, highestLen int
+		)
+		// Get the first 'in' osd.
+		for _, osd := range osds {
+			if _, ok := osdUpPGs[osd]; !ok {
+				continue
+			}
+			lowestOsd = osd
+			lowestLen = len(osdUpPGs[osd])
+			highestOsd = osd
+			highestLen = len(osdUpPGs[osd])
+		}
+		for _, osd := range osds {
+			pgs, ok := osdUpPGs[osd]
+			if !ok {
+				continue
+			}
+			thisLen := len(pgs)
+			if thisLen < lowestLen {
+				lowestOsd = osd
+				lowestLen = thisLen
+			}
+			if thisLen > highestLen {
+				highestOsd = osd
+				highestLen = thisLen
+			}
+		}
+		if highestLen-lowestLen <= targetSpread {
+			// Balanced enough - all done.
+			return
+		}
+
+		pg := osdUpPGs[highestOsd][highestLen-1]
+		M.remap(pg.PgID, highestOsd, lowestOsd)
+		osdUpPGs[lowestOsd] = append(osdUpPGs[lowestOsd], pg)
+		osdUpPGs[highestOsd] = osdUpPGs[highestOsd][:highestLen-1]
+		backfillsInSet++
+	}
+}
+
+func getUpPGsForOsds(osds []int) map[int][]*pgBriefItem {
+	osdPGs := make(map[int][]*pgBriefItem)
+	for _, osd := range osds {
+		osdPGs[osd] = nil
+	}
+
+	pgBriefs := pgDumpPgsBrief()
+	for _, pgBrief := range pgBriefs {
+		for _, osd := range pgBrief.Up {
+			if _, ok := osdPGs[osd]; ok {
+				osdPGs[osd] = append(osdPGs[osd], pgBrief)
+				break
+			}
+		}
+	}
+	return osdPGs
+}
+
+func run(command ...string) (string, error) {
+	fmt.Printf("** executing: %s\n", strings.Join(command, " "))
+
+	cmd := exec.Command(command[0], command[1:]...)
+	stdout, err := cmd.Output()
+
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to execute command: %s",
+			strings.Join(command, " "))
+	}
+
+	return string(stdout), nil
+}
+
+func runOrDie(command ...string) string {
+	stdout, err := run(command...)
+	if err != nil {
+		panic(errors.WithStack(err))
+	}
+	return stdout
+}
+
+func confirmProceed() bool {
+	if yes {
+		return true
+	}
+
+	if !M.dirty {
+		return false
+	}
+
+	fmt.Println(M.String())
+
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Printf("proceed [y/n]?: ")
+
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(answer)
+		switch answer {
+		case "y", "Y":
+			return true
+		case "n", "N":
+			return false
+		default:
+			fmt.Printf("invalid answer '%s'\n", answer)
+		}
+	}
+}

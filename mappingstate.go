@@ -1,0 +1,214 @@
+// Copyright 2021 DigitalOcean
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+)
+
+type mappingState struct {
+	pgUpmapItems []*pgUpmapItem // This is always sorted for predictability and repeatability.
+	bs           *backfillState
+	dirty        bool
+
+	l sync.Mutex
+}
+
+func mustGetCurrentMappingState() *mappingState {
+	osdDumpOut := osdDump()
+	items := osdDumpOut.PgUpmapItems
+	sort.Slice(items, func(i, j int) bool { return items[i].PgID < items[j].PgID })
+	return &mappingState{
+		pgUpmapItems: osdDumpOut.PgUpmapItems,
+		bs:           mustGetCurrentBackfillState(),
+	}
+}
+
+func (m *mappingState) remap(pgid string, from, to int) {
+	m.l.Lock()
+	defer m.l.Unlock()
+
+	m.bs.accountForRemap(pgid, from, to)
+	pui := m.findOrMakeUpmapItem(pgid)
+
+	pui.dirty = true
+	m.dirty = true
+
+	// Look for an existing mapping that is opposite to what we intend
+	// here. If it exists, the right thing to do is to remove it from the
+	// upmap item, rather than trying to add a new mapping reversing it,
+	// since the latter will be ignored by Ceph. If it doesn't exist, it's
+	// safe to add the mapping.
+	for i, m := range pui.Mappings {
+		if m.From == to && m.To == from {
+			// This mapping is the exact opposite of what we want -
+			// simply remove it.
+			pui.Mappings[i].dirty = true
+			pui.removedMappings = append(pui.removedMappings, pui.Mappings[i])
+			pui.Mappings = append(pui.Mappings[0:i], pui.Mappings[i+1:]...)
+			return
+		}
+		if m.To == from {
+			// Modify this mapping to point to the new destination.
+			pui.Mappings[i].dirty = true
+			pui.removedMappings = append(pui.removedMappings, pui.Mappings[i])
+			pui.Mappings[i].To = to
+			return
+		}
+		if m.From == to || m.From == from || m.To == to {
+			panic(fmt.Sprintf("pg %s: conflicting mapping(s) found when trying to map from %d to %d", pgid, from, to))
+		}
+	}
+
+	// No existing mapping was found; add a new one.
+	pui.Mappings = append(pui.Mappings, mapping{From: from, To: to, dirty: true})
+}
+
+func (m *mappingState) findOrMakeUpmapItem(pgid string) *pgUpmapItem {
+	puis := m.pgUpmapItems
+	i := sort.Search(len(puis), func(i int) bool { return m.pgUpmapItems[i].PgID >= pgid })
+	if i < len(puis) && puis[i].PgID == pgid {
+		return puis[i]
+	}
+
+	// Sorted insertion.
+	pui := &pgUpmapItem{
+		PgID: pgid,
+	}
+	puis = append(puis, &pgUpmapItem{})
+	copy(puis[i+1:], puis[i:])
+	puis[i] = pui
+	m.pgUpmapItems = puis
+
+	return pui
+}
+
+type iterateFilter struct {
+	pgid     string
+	from, to int
+}
+
+func withPgid(pgid string) func(*iterateFilter) {
+	return func(f *iterateFilter) {
+		f.pgid = pgid
+	}
+}
+
+func withFrom(from int) func(*iterateFilter) {
+	return func(f *iterateFilter) {
+		f.from = from
+	}
+}
+
+func withTo(to int) func(*iterateFilter) {
+	return func(f *iterateFilter) {
+		f.to = to
+	}
+}
+
+func (m *mappingState) iterateMappings(f func(pgid string, mp mapping), filterOpts ...func(*iterateFilter)) {
+	m.l.Lock()
+	defer m.l.Unlock()
+
+	filter := &iterateFilter{
+		from: -1,
+		to:   -1,
+	}
+	for _, fo := range filterOpts {
+		fo(filter)
+	}
+	for _, pui := range m.pgUpmapItems {
+		if filter.pgid != "" && pui.PgID != filter.pgid {
+			continue
+		}
+		for _, mp := range pui.Mappings {
+			if filter.from != -1 && mp.From != filter.from {
+				continue
+			}
+			if filter.to != -1 && mp.To != filter.to {
+				continue
+			}
+			f(pui.PgID, mp)
+		}
+	}
+}
+
+type pgMapping struct {
+	pgid string
+	mp   mapping
+}
+
+func (m *mappingState) getMappings(filterOpts ...func(*iterateFilter)) []pgMapping {
+	mappings := []pgMapping{}
+
+	m.iterateMappings(func(pgid string, mp mapping) {
+		mappings = append(mappings, pgMapping{
+			pgid: pgid,
+			mp:   mp,
+		})
+	},
+		filterOpts...,
+	)
+
+	return mappings
+}
+
+func (m *mappingState) dirtyUpmapItems() []*pgUpmapItem {
+	m.l.Lock()
+	defer m.l.Unlock()
+
+	items := []*pgUpmapItem{}
+
+	for _, pui := range m.pgUpmapItems {
+		if pui.dirty {
+			items = append(items, pui)
+		}
+	}
+	return items
+}
+
+func (m *mappingState) apply() {
+	wg := sync.WaitGroup{}
+	ch := make(chan *pgUpmapItem)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			for pui := range ch {
+				pui.do()
+			}
+
+			wg.Done()
+		}()
+	}
+
+	for _, pui := range m.dirtyUpmapItems() {
+		ch <- pui
+	}
+	close(ch)
+
+	wg.Wait()
+}
+
+func (m *mappingState) String() string {
+	strs := []string{}
+	for _, pui := range m.dirtyUpmapItems() {
+		strs = append(strs, pui.String())
+	}
+	return strings.Join(strs, "\n")
+}
