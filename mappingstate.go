@@ -49,11 +49,6 @@ func (m *mappingState) remap(pgid string, from, to int) {
 	pui.dirty = true
 	m.dirty = true
 
-	// Look for an existing mapping that is opposite to what we intend
-	// here. If it exists, the right thing to do is to remove it from the
-	// upmap item, rather than trying to add a new mapping reversing it,
-	// since the latter will be ignored by Ceph. If it doesn't exist, it's
-	// safe to add the mapping.
 	for i, m := range pui.Mappings {
 		if m.From == to && m.To == from {
 			// This mapping is the exact opposite of what we want -
