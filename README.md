@@ -55,11 +55,12 @@ docker run -v $(pwd):/pgremapper -w /pgremapper golang:1.16.3 go build -o pgrema
 `pgremapper` has some global options:
 
 ```
-$ ./pgremapper [--concurrency <n>] [--yes] <command>
+$ ./pgremapper [--concurrency <n>] [--yes] [--verbose] <command>
 ```
 
 * `--concurrency`: For commands that can be issued in parallel, this controls the concurrency. This is set at a reasonable default that generally doesn't lead to too much concurrent peering in the cluster when manipulating the `pg-upmap` table.
 * `--yes`: Run non-interactively, skipping the diff output that would show which changes will be applied.
+* `--verbose`: Display Ceph commands being run, for debugging purposes.
 
 ### osdspec
 

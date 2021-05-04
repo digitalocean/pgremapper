@@ -37,6 +37,7 @@ var gitCommit string
 var (
 	concurrency int
 	yes         bool
+	verbose     bool
 	// M represents the state of upmap items, based on current state plus
 	// whatever modifications have been made.
 	M *mappingState
@@ -414,6 +415,7 @@ func mustParseMaxBackfillReservations(cmd *cobra.Command) {
 func init() {
 	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 5, "number of commands to issue in parallel")
 	rootCmd.PersistentFlags().BoolVar(&yes, "yes", false, "skip confirmations and dry-run output")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "display Ceph commands being run")
 
 	balanceBucketCmd.Flags().Int("max-backfills", 5, "max number of backfills to schedule for this bucket, including pre-existing ones")
 	balanceBucketCmd.Flags().Int("target-spread", 1, "target difference between the fullest and emptiest OSD in the bucket")
@@ -813,7 +815,9 @@ func getUpPGsForOsds(osds []int) map[int][]*pgBriefItem {
 }
 
 func run(command ...string) (string, error) {
-	fmt.Printf("** executing: %s\n", strings.Join(command, " "))
+	if verbose {
+		fmt.Printf("** executing: %s\n", strings.Join(command, " "))
+	}
 
 	cmd := exec.Command(command[0], command[1:]...)
 	stdout, err := cmd.Output()
