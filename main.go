@@ -387,7 +387,28 @@ JSON format example, remapping PG 1.1 from OSD 100 to OSD 42:
 			}
 
 			for _, m := range mappings {
-				M.remap(m.PgID, m.Mapping.From, m.Mapping.To)
+				// There are two cases to consider:
+				// 1. The mapping we want to create is simply
+				//    gone - in this case, we can re-issue the
+				//    remap in its original form.
+				// 2. There is now a different upmap item from
+				//    the source OSD. We need to find this one
+				//    and modify it.
+				//
+				// Look for case 2 first, falling back to case
+				// 1 if we don't find anything.
+				pui := M.findOrMakeUpmapItem(m.PgID)
+				found := false
+				for _, puiM := range pui.Mappings {
+					if puiM.From == m.Mapping.From {
+						M.remap(m.PgID, puiM.To, m.Mapping.To)
+						found = true
+						break
+					}
+				}
+				if !found {
+					M.remap(m.PgID, m.Mapping.From, m.Mapping.To)
+				}
 			}
 
 			if !confirmProceed() {
