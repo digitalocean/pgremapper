@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -278,6 +279,125 @@ thus safer and more convenient to use than 'ceph osd pg-upmap-items' directly.
 		},
 	}
 
+	exportMappingsCommand = &cobra.Command{
+		Use:   "export-mappings <osdspec> [<osdspec> ...]",
+		Short: "Export the mappings from the given OSD spec(s).",
+		Long: `Export the mappings from the given OSD spec(s).
+
+Export all upmaps for the given OSD spec(s) in a json format usable by
+import-mappings. Useful for keeping the state of existing mappings to restore
+after destroying a number of OSDs, or any other CRUSH change that will cause
+upmap items to be cleaned up by the mons.
+
+Note that the mappings exported will be just the portions of the upmap items
+pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the
+mapping).
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) < 1 {
+				return errors.New("at least one OSD must be specified")
+			}
+
+			for _, arg := range args {
+				if _, err := parseOsdSpec(arg); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			var writer io.Writer
+			output := mustGetString(cmd, "output")
+			if output == "" {
+				writer = os.Stdout
+			} else {
+				f, err := os.Create(output)
+				if err != nil {
+					panic(err)
+				}
+
+				defer f.Close()
+				writer = f
+			}
+
+			var filters []mappingFilter
+			for _, arg := range args {
+				osds := mustParseOsdSpec(arg)
+				for _, osd := range osds {
+					filters = append(filters, withFrom(osd), withTo(osd))
+				}
+			}
+
+			M = mustGetCurrentMappingState()
+			mappings := M.getMappings(mfOr(filters...))
+
+			if err := json.NewEncoder(writer).Encode(mappings); err != nil {
+				panic(err)
+			}
+		},
+	}
+
+	importMappingsCommand = &cobra.Command{
+		Use:   "import-mappings [<file>]",
+		Short: "Import and apply mappings.",
+		Long: `Import and apply mappings.
+
+Import all upmaps from the given JSON input (probably from export-mappings) to the
+cluster. Input is stdin unless a file path is provided.
+
+JSON format example, remapping PG 1.1 from OSD 100 to OSD 42:
+[
+  {
+    "pgid": "1.1",
+    "mapping": {
+      "from": 100,
+      "to": 42,
+    }
+  }
+]
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 1 {
+				return errors.New("extra args")
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			// Read in either the file or from stdin
+			var reader io.Reader
+			if len(args) == 0 {
+				reader = os.Stdin
+			} else {
+				f, err := os.Open(args[0])
+				if err != nil {
+					panic(err)
+				}
+
+				defer f.Close()
+				reader = f
+			}
+
+			M = mustGetCurrentMappingState()
+
+			var mappings []pgMapping
+			if err := json.NewDecoder(reader).Decode(&mappings); err != nil {
+				panic(err)
+			}
+
+			for _, m := range mappings {
+				M.remap(m.PgID, m.Mapping.From, m.Mapping.To)
+			}
+
+			if !confirmProceed() {
+				return
+			}
+
+			M.apply()
+		},
+	}
+
 	versionCmd = &cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
@@ -439,6 +559,10 @@ func init() {
 	rootCmd.AddCommand(undoUpmapsCmd)
 
 	rootCmd.AddCommand(remapCmd)
+
+	exportMappingsCommand.Flags().String("output", "", "write output to the given file path instead of stdout")
+	rootCmd.AddCommand(exportMappingsCommand)
+	rootCmd.AddCommand(importMappingsCommand)
 
 	rootCmd.AddCommand(versionCmd)
 }
