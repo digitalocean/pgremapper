@@ -154,8 +154,8 @@ func (m *mappingState) iterateMappings(f func(pgid string, mp mapping), filter m
 }
 
 type pgMapping struct {
-	pgid string
-	mp   mapping
+	PgID    string  `json:"pgid"`
+	Mapping mapping `json:"mapping"`
 }
 
 func (m *mappingState) getMappings(filter mappingFilter) []pgMapping {
@@ -163,8 +163,8 @@ func (m *mappingState) getMappings(filter mappingFilter) []pgMapping {
 
 	m.iterateMappings(func(pgid string, mp mapping) {
 		mappings = append(mappings, pgMapping{
-			pgid: pgid,
-			mp:   mp,
+			PgID:    pgid,
+			Mapping: mp,
 		})
 	},
 		filter,

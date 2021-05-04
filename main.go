@@ -580,7 +580,7 @@ func calcPgMappingsToDrainOsd(
 		// Since this PG has now been remapped, remove it from the candidates.
 		newCandidates := []pgMapping{}
 		for _, m := range candidateMappings {
-			if m.pgid == pgid {
+			if m.PgID == pgid {
 				continue
 			}
 			newCandidates = append(newCandidates, m)
@@ -607,8 +607,8 @@ func getCandidateMappings(
 				continue
 			}
 			candidateMappings = append(candidateMappings, pgMapping{
-				pgid: pg.PgID,
-				mp: mapping{
+				PgID: pg.PgID,
+				Mapping: mapping{
 					From: sourceOsd,
 					To:   targetOsd,
 				},
@@ -685,7 +685,7 @@ func calcPgMappingsToUndoUpmaps(osds []int, osdsAreTargets bool) {
 			// action, reverse the From and To (since we want to
 			// undo the associated upmap).
 			for i := range candidateMappings {
-				mp := &candidateMappings[i].mp
+				mp := &candidateMappings[i].Mapping
 				mp.From, mp.To = mp.To, mp.From
 			}
 
@@ -710,11 +710,11 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 	// the local reservation count (the count of backfills for which this
 	// OSD is primary), and thus apply a weight to it.
 	for _, m := range candidateMappings {
-		if !M.bs.hasRoomForRemap(m.pgid, m.mp.From, m.mp.To) {
+		if !M.bs.hasRoomForRemap(m.PgID, m.Mapping.From, m.Mapping.To) {
 			continue
 		}
 
-		obs := M.bs.osd(m.mp.To)
+		obs := M.bs.osd(m.Mapping.To)
 		score := obs.remoteReservations*10 + obs.localReservations
 		if score < bestScore {
 			found = true
@@ -726,9 +726,9 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 		return "", false
 	}
 
-	M.remap(bestMapping.pgid, bestMapping.mp.From, bestMapping.mp.To)
+	M.remap(bestMapping.PgID, bestMapping.Mapping.From, bestMapping.Mapping.To)
 
-	return bestMapping.pgid, true
+	return bestMapping.PgID, true
 }
 
 func calcPgMappingsToBalanceOsds(osds []int, maxBackfills, targetSpread int) {
