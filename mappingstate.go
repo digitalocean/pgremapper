@@ -43,8 +43,15 @@ func (m *mappingState) remap(pgid string, from, to int) {
 	m.l.Lock()
 	defer m.l.Unlock()
 
-	m.bs.accountForRemap(pgid, from, to)
 	pui := m.findOrMakeUpmapItem(pgid)
+	for _, m := range pui.Mappings {
+		if m.From == from && m.To == to {
+			// Duplicate - ignore
+			return
+		}
+	}
+
+	m.bs.accountForRemap(pgid, from, to)
 
 	pui.dirty = true
 	m.dirty = true
