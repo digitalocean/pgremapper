@@ -98,52 +98,57 @@ func (m *mappingState) findOrMakeUpmapItem(pgid string) *pgUpmapItem {
 	return pui
 }
 
-type iterateFilter struct {
-	pgid     string
-	from, to int
-}
+type mappingFilter func(*pgUpmapItem, mapping) bool
 
-func withPgid(pgid string) func(*iterateFilter) {
-	return func(f *iterateFilter) {
-		f.pgid = pgid
+func withPgid(pgid string) mappingFilter {
+	return func(pui *pgUpmapItem, _ mapping) bool {
+		return pui.PgID == pgid
 	}
 }
 
-func withFrom(from int) func(*iterateFilter) {
-	return func(f *iterateFilter) {
-		f.from = from
+func withFrom(from int) mappingFilter {
+	return func(_ *pgUpmapItem, m mapping) bool {
+		return m.From == from
 	}
 }
 
-func withTo(to int) func(*iterateFilter) {
-	return func(f *iterateFilter) {
-		f.to = to
+func withTo(to int) mappingFilter {
+	return func(_ *pgUpmapItem, m mapping) bool {
+		return m.To == to
 	}
 }
 
-func (m *mappingState) iterateMappings(f func(pgid string, mp mapping), filterOpts ...func(*iterateFilter)) {
+func mfAnd(filters ...mappingFilter) mappingFilter {
+	return func(pui *pgUpmapItem, m mapping) bool {
+		for _, f := range filters {
+			if !f(pui, m) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func mfOr(filters ...mappingFilter) mappingFilter {
+	return func(pui *pgUpmapItem, m mapping) bool {
+		for _, f := range filters {
+			if f(pui, m) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func (m *mappingState) iterateMappings(f func(pgid string, mp mapping), filter mappingFilter) {
 	m.l.Lock()
 	defer m.l.Unlock()
 
-	filter := &iterateFilter{
-		from: -1,
-		to:   -1,
-	}
-	for _, fo := range filterOpts {
-		fo(filter)
-	}
 	for _, pui := range m.pgUpmapItems {
-		if filter.pgid != "" && pui.PgID != filter.pgid {
-			continue
-		}
 		for _, mp := range pui.Mappings {
-			if filter.from != -1 && mp.From != filter.from {
-				continue
+			if filter(pui, mp) {
+				f(pui.PgID, mp)
 			}
-			if filter.to != -1 && mp.To != filter.to {
-				continue
-			}
-			f(pui.PgID, mp)
 		}
 	}
 }
@@ -153,7 +158,7 @@ type pgMapping struct {
 	mp   mapping
 }
 
-func (m *mappingState) getMappings(filterOpts ...func(*iterateFilter)) []pgMapping {
+func (m *mappingState) getMappings(filter mappingFilter) []pgMapping {
 	mappings := []pgMapping{}
 
 	m.iterateMappings(func(pgid string, mp mapping) {
@@ -162,7 +167,7 @@ func (m *mappingState) getMappings(filterOpts ...func(*iterateFilter)) []pgMappi
 			mp:   mp,
 		})
 	},
-		filterOpts...,
+		filter,
 	)
 
 	return mappings
