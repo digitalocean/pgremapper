@@ -445,7 +445,7 @@ func init() {
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Printf("%+v\n", err)
+		fmt.Fprintf(os.Stderr, "%+v\n", err)
 		os.Exit(1)
 	}
 }
@@ -816,7 +816,7 @@ func getUpPGsForOsds(osds []int) map[int][]*pgBriefItem {
 
 func run(command ...string) (string, error) {
 	if verbose {
-		fmt.Printf("** executing: %s\n", strings.Join(command, " "))
+		fmt.Fprintf(os.Stderr, "** executing: %s\n", strings.Join(command, " "))
 	}
 
 	cmd := exec.Command(command[0], command[1:]...)
