@@ -55,11 +55,12 @@ docker run -v $(pwd):/pgremapper -w /pgremapper golang:1.16.3 go build -o pgrema
 `pgremapper` has some global options:
 
 ```
-$ ./pgremapper [--concurrency <n>] [--yes] <command>
+$ ./pgremapper [--concurrency <n>] [--yes] [--verbose] <command>
 ```
 
 * `--concurrency`: For commands that can be issued in parallel, this controls the concurrency. This is set at a reasonable default that generally doesn't lead to too much concurrent peering in the cluster when manipulating the `pg-upmap` table.
 * `--yes`: Run non-interactively, skipping the diff output that would show which changes will be applied.
+* `--verbose`: Display Ceph commands being run, for debugging purposes.
 
 ### osdspec
 
@@ -159,6 +160,42 @@ Schedule backfills to move 8 PGs from OSD 15 to any combination of OSDs on host 
 ```
 $ ./pgremapper drain 15 --target-osds bucket:data12 --allow-movement-across host --max-backfill-reservations 2 --max-source-backfills 8
 ```
+
+### export-mappings
+
+Export all upmaps for the given OSD spec(s) in a json format usable by import-mappings. Useful for keeping the state of existing mappings to restore after destroying a number of OSDs, or any other CRUSH change that will cause upmap items to be cleaned up by the mons.
+
+Note that the mappings exported will be just the portions of the upmap items pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the mapping).
+
+```
+$ ./pgremapper export-mappings <osdspec> ... [--output <file>]
+```
+
+* `<osdspec> ...`: The OSDs for which mappings will be exported.
+* `--output`: Write output to the given file path instead of `stdout`.
+
+### import-mappings
+
+Import all upmaps from the given JSON input (probably from export-mappings) to the cluster. Input is `stdin` unless a file path is provided.
+
+JSON format example, remapping PG 1.1 from OSD 100 to OSD 42:
+```
+[
+  {
+    "pgid": "1.1",
+    "mapping": {
+      "from": 100,
+      "to": 42,
+    }
+  }
+]
+```
+
+```
+$ ./pgremapper import-mappings [<file>]
+```
+
+* `<file>`: Read from the given file path instead of `stdin`.
 
 ### remap
 

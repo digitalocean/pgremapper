@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -37,6 +38,7 @@ var gitCommit string
 var (
 	concurrency int
 	yes         bool
+	verbose     bool
 	// M represents the state of upmap items, based on current state plus
 	// whatever modifications have been made.
 	M *mappingState
@@ -277,6 +279,146 @@ thus safer and more convenient to use than 'ceph osd pg-upmap-items' directly.
 		},
 	}
 
+	exportMappingsCommand = &cobra.Command{
+		Use:   "export-mappings <osdspec> [<osdspec> ...]",
+		Short: "Export the mappings from the given OSD spec(s).",
+		Long: `Export the mappings from the given OSD spec(s).
+
+Export all upmaps for the given OSD spec(s) in a json format usable by
+import-mappings. Useful for keeping the state of existing mappings to restore
+after destroying a number of OSDs, or any other CRUSH change that will cause
+upmap items to be cleaned up by the mons.
+
+Note that the mappings exported will be just the portions of the upmap items
+pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the
+mapping).
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) < 1 {
+				return errors.New("at least one OSD must be specified")
+			}
+
+			for _, arg := range args {
+				if _, err := parseOsdSpec(arg); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			var writer io.Writer
+			output := mustGetString(cmd, "output")
+			if output == "" {
+				writer = os.Stdout
+			} else {
+				f, err := os.Create(output)
+				if err != nil {
+					panic(err)
+				}
+
+				defer f.Close()
+				writer = f
+			}
+
+			var filters []mappingFilter
+			for _, arg := range args {
+				osds := mustParseOsdSpec(arg)
+				for _, osd := range osds {
+					filters = append(filters, withFrom(osd), withTo(osd))
+				}
+			}
+
+			M = mustGetCurrentMappingState()
+			mappings := M.getMappings(mfOr(filters...))
+
+			if err := json.NewEncoder(writer).Encode(mappings); err != nil {
+				panic(err)
+			}
+		},
+	}
+
+	importMappingsCommand = &cobra.Command{
+		Use:   "import-mappings [<file>]",
+		Short: "Import and apply mappings.",
+		Long: `Import and apply mappings.
+
+Import all upmaps from the given JSON input (probably from export-mappings) to the
+cluster. Input is stdin unless a file path is provided.
+
+JSON format example, remapping PG 1.1 from OSD 100 to OSD 42:
+[
+  {
+    "pgid": "1.1",
+    "mapping": {
+      "from": 100,
+      "to": 42,
+    }
+  }
+]
+`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 1 {
+				return errors.New("extra args")
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			// Read in either the file or from stdin
+			var reader io.Reader
+			if len(args) == 0 {
+				reader = os.Stdin
+			} else {
+				f, err := os.Open(args[0])
+				if err != nil {
+					panic(err)
+				}
+
+				defer f.Close()
+				reader = f
+			}
+
+			M = mustGetCurrentMappingState()
+
+			var mappings []pgMapping
+			if err := json.NewDecoder(reader).Decode(&mappings); err != nil {
+				panic(err)
+			}
+
+			for _, m := range mappings {
+				// There are two cases to consider:
+				// 1. The mapping we want to create is simply
+				//    gone - in this case, we can re-issue the
+				//    remap in its original form.
+				// 2. There is now a different upmap item from
+				//    the source OSD. We need to find this one
+				//    and modify it.
+				//
+				// Look for case 2 first, falling back to case
+				// 1 if we don't find anything.
+				pui := M.findOrMakeUpmapItem(m.PgID)
+				found := false
+				for _, puiM := range pui.Mappings {
+					if puiM.From == m.Mapping.From {
+						M.remap(m.PgID, puiM.To, m.Mapping.To)
+						found = true
+						break
+					}
+				}
+				if !found {
+					M.remap(m.PgID, m.Mapping.From, m.Mapping.To)
+				}
+			}
+
+			if !confirmProceed() {
+				return
+			}
+
+			M.apply()
+		},
+	}
+
 	versionCmd = &cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
@@ -414,6 +556,7 @@ func mustParseMaxBackfillReservations(cmd *cobra.Command) {
 func init() {
 	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 5, "number of commands to issue in parallel")
 	rootCmd.PersistentFlags().BoolVar(&yes, "yes", false, "skip confirmations and dry-run output")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "display Ceph commands being run")
 
 	balanceBucketCmd.Flags().Int("max-backfills", 5, "max number of backfills to schedule for this bucket, including pre-existing ones")
 	balanceBucketCmd.Flags().Int("target-spread", 1, "target difference between the fullest and emptiest OSD in the bucket")
@@ -438,12 +581,16 @@ func init() {
 
 	rootCmd.AddCommand(remapCmd)
 
+	exportMappingsCommand.Flags().String("output", "", "write output to the given file path instead of stdout")
+	rootCmd.AddCommand(exportMappingsCommand)
+	rootCmd.AddCommand(importMappingsCommand)
+
 	rootCmd.AddCommand(versionCmd)
 }
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Printf("%+v\n", err)
+		fmt.Fprintf(os.Stderr, "%+v\n", err)
 		os.Exit(1)
 	}
 }
@@ -578,7 +725,7 @@ func calcPgMappingsToDrainOsd(
 		// Since this PG has now been remapped, remove it from the candidates.
 		newCandidates := []pgMapping{}
 		for _, m := range candidateMappings {
-			if m.pgid == pgid {
+			if m.PgID == pgid {
 				continue
 			}
 			newCandidates = append(newCandidates, m)
@@ -605,8 +752,8 @@ func getCandidateMappings(
 				continue
 			}
 			candidateMappings = append(candidateMappings, pgMapping{
-				pgid: pg.PgID,
-				mp: mapping{
+				PgID: pg.PgID,
+				Mapping: mapping{
 					From: sourceOsd,
 					To:   targetOsd,
 				},
@@ -683,7 +830,7 @@ func calcPgMappingsToUndoUpmaps(osds []int, osdsAreTargets bool) {
 			// action, reverse the From and To (since we want to
 			// undo the associated upmap).
 			for i := range candidateMappings {
-				mp := &candidateMappings[i].mp
+				mp := &candidateMappings[i].Mapping
 				mp.From, mp.To = mp.To, mp.From
 			}
 
@@ -708,11 +855,11 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 	// the local reservation count (the count of backfills for which this
 	// OSD is primary), and thus apply a weight to it.
 	for _, m := range candidateMappings {
-		if !M.bs.hasRoomForRemap(m.pgid, m.mp.From, m.mp.To) {
+		if !M.bs.hasRoomForRemap(m.PgID, m.Mapping.From, m.Mapping.To) {
 			continue
 		}
 
-		obs := M.bs.osd(m.mp.To)
+		obs := M.bs.osd(m.Mapping.To)
 		score := obs.remoteReservations*10 + obs.localReservations
 		if score < bestScore {
 			found = true
@@ -724,9 +871,9 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 		return "", false
 	}
 
-	M.remap(bestMapping.pgid, bestMapping.mp.From, bestMapping.mp.To)
+	M.remap(bestMapping.PgID, bestMapping.Mapping.From, bestMapping.Mapping.To)
 
-	return bestMapping.pgid, true
+	return bestMapping.PgID, true
 }
 
 func calcPgMappingsToBalanceOsds(osds []int, maxBackfills, targetSpread int) {
@@ -813,7 +960,9 @@ func getUpPGsForOsds(osds []int) map[int][]*pgBriefItem {
 }
 
 func run(command ...string) (string, error) {
-	fmt.Printf("** executing: %s\n", strings.Join(command, " "))
+	if verbose {
+		fmt.Fprintf(os.Stderr, "** executing: %s\n", strings.Join(command, " "))
+	}
 
 	cmd := exec.Command(command[0], command[1:]...)
 	stdout, err := cmd.Output()

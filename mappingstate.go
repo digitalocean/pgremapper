@@ -43,17 +43,19 @@ func (m *mappingState) remap(pgid string, from, to int) {
 	m.l.Lock()
 	defer m.l.Unlock()
 
-	m.bs.accountForRemap(pgid, from, to)
 	pui := m.findOrMakeUpmapItem(pgid)
+	for _, m := range pui.Mappings {
+		if m.From == from && m.To == to {
+			// Duplicate - ignore
+			return
+		}
+	}
+
+	m.bs.accountForRemap(pgid, from, to)
 
 	pui.dirty = true
 	m.dirty = true
 
-	// Look for an existing mapping that is opposite to what we intend
-	// here. If it exists, the right thing to do is to remove it from the
-	// upmap item, rather than trying to add a new mapping reversing it,
-	// since the latter will be ignored by Ceph. If it doesn't exist, it's
-	// safe to add the mapping.
 	for i, m := range pui.Mappings {
 		if m.From == to && m.To == from {
 			// This mapping is the exact opposite of what we want -
@@ -98,71 +100,76 @@ func (m *mappingState) findOrMakeUpmapItem(pgid string) *pgUpmapItem {
 	return pui
 }
 
-type iterateFilter struct {
-	pgid     string
-	from, to int
-}
+type mappingFilter func(*pgUpmapItem, mapping) bool
 
-func withPgid(pgid string) func(*iterateFilter) {
-	return func(f *iterateFilter) {
-		f.pgid = pgid
+func withPgid(pgid string) mappingFilter {
+	return func(pui *pgUpmapItem, _ mapping) bool {
+		return pui.PgID == pgid
 	}
 }
 
-func withFrom(from int) func(*iterateFilter) {
-	return func(f *iterateFilter) {
-		f.from = from
+func withFrom(from int) mappingFilter {
+	return func(_ *pgUpmapItem, m mapping) bool {
+		return m.From == from
 	}
 }
 
-func withTo(to int) func(*iterateFilter) {
-	return func(f *iterateFilter) {
-		f.to = to
+func withTo(to int) mappingFilter {
+	return func(_ *pgUpmapItem, m mapping) bool {
+		return m.To == to
 	}
 }
 
-func (m *mappingState) iterateMappings(f func(pgid string, mp mapping), filterOpts ...func(*iterateFilter)) {
+func mfAnd(filters ...mappingFilter) mappingFilter {
+	return func(pui *pgUpmapItem, m mapping) bool {
+		for _, f := range filters {
+			if !f(pui, m) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func mfOr(filters ...mappingFilter) mappingFilter {
+	return func(pui *pgUpmapItem, m mapping) bool {
+		for _, f := range filters {
+			if f(pui, m) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func (m *mappingState) iterateMappings(f func(pgid string, mp mapping), filter mappingFilter) {
 	m.l.Lock()
 	defer m.l.Unlock()
 
-	filter := &iterateFilter{
-		from: -1,
-		to:   -1,
-	}
-	for _, fo := range filterOpts {
-		fo(filter)
-	}
 	for _, pui := range m.pgUpmapItems {
-		if filter.pgid != "" && pui.PgID != filter.pgid {
-			continue
-		}
 		for _, mp := range pui.Mappings {
-			if filter.from != -1 && mp.From != filter.from {
-				continue
+			if filter(pui, mp) {
+				f(pui.PgID, mp)
 			}
-			if filter.to != -1 && mp.To != filter.to {
-				continue
-			}
-			f(pui.PgID, mp)
 		}
 	}
 }
 
 type pgMapping struct {
-	pgid string
-	mp   mapping
+	PgID    string  `json:"pgid"`
+	Mapping mapping `json:"mapping"`
 }
 
-func (m *mappingState) getMappings(filterOpts ...func(*iterateFilter)) []pgMapping {
+func (m *mappingState) getMappings(filter mappingFilter) []pgMapping {
 	mappings := []pgMapping{}
 
 	m.iterateMappings(func(pgid string, mp mapping) {
 		mappings = append(mappings, pgMapping{
-			pgid: pgid,
-			mp:   mp,
+			PgID:    pgid,
+			Mapping: mp,
 		})
 	},
-		filterOpts...,
+		filter,
 	)
 
 	return mappings
