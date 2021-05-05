@@ -207,7 +207,7 @@ $ ./pgremapper remap <pg ID> <source osd ID> <target osd ID>
 
 ### undo-upmaps
 
-Given a list of OSDs, remove (or modify) upmap items such that the OSDs become the source (or target if `--target` is specified) of backfill operations (i.e.  they are currently the "To" ("From") of the upmap items) up to the backfill limits specified. Backfill is spread across target and primary OSDs in a best-effort manor.
+Given a list of OSDs, remove (or modify) upmap items such that the OSDs become the source (or target if `--target` is specified) of backfill operations (i.e.  they are currently the "To" ("From") of the upmap items) up to the backfill limits specified. Backfill is spread across target and primary OSDs in a best-effort manner.
 
 This is useful for cases where the upmap rebalancer won't do this for us, e.g., performing a swap-bucket where we want the source OSDs to totally drain (vs. balance with the rest of the cluster). It also achieves a much higher level of concurrency than the balancer generally will.
 
