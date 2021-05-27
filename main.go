@@ -15,7 +15,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -984,30 +983,16 @@ func runOrDie(command ...string) string {
 }
 
 func confirmProceed() bool {
+	if !M.dirty {
+		fmt.Fprintf(os.Stderr, "nothing to do\n")
+		return false
+	}
+
 	if yes {
 		return true
 	}
 
-	if !M.dirty {
-		return false
-	}
-
 	fmt.Println(M.String())
 
-	reader := bufio.NewReader(os.Stdin)
-
-	for {
-		fmt.Printf("proceed [y/n]?: ")
-
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(answer)
-		switch answer {
-		case "y", "Y":
-			return true
-		case "n", "N":
-			return false
-		default:
-			fmt.Printf("invalid answer '%s'\n", answer)
-		}
-	}
+	return false
 }
