@@ -984,12 +984,13 @@ func runOrDie(command ...string) string {
 }
 
 func confirmProceed() bool {
-	if yes {
-		return true
+	if !M.dirty {
+		fmt.Fprintf(os.Stderr, "nothing to do\n")
+		return false
 	}
 
-	if !M.dirty {
-		return false
+	if yes {
+		return true
 	}
 
 	fmt.Println(M.String())
