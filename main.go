@@ -290,7 +290,7 @@ upmap items to be cleaned up by the mons.
 
 Note that the mappings exported will be just the portions of the upmap items
 pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the
-mapping).
+mapping), unless --whole-pg is specified.
 `,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) < 1 {
@@ -330,6 +330,17 @@ mapping).
 
 			M = mustGetCurrentMappingState()
 			mappings := M.getMappings(mfOr(filters...))
+
+			if mustGetBool(cmd, "whole-pg") {
+				// Using the list of mappings from above, query
+				// again, this time getting all mappings with
+				// the PG IDs from the first query.
+				var filters []mappingFilter
+				for _, mapping := range mappings {
+					filters = append(filters, withPgid(mapping.PgID))
+				}
+				mappings = M.getMappings(mfOr(filters...))
+			}
 
 			if err := json.NewEncoder(writer).Encode(mappings); err != nil {
 				panic(err)
@@ -581,6 +592,7 @@ func init() {
 	rootCmd.AddCommand(remapCmd)
 
 	exportMappingsCommand.Flags().String("output", "", "write output to the given file path instead of stdout")
+	exportMappingsCommand.Flags().Bool("whole-pg", false, "export all mappings for any PGs that include the given OSD(s), not just the portions pertaining to those OSDs")
 	rootCmd.AddCommand(exportMappingsCommand)
 	rootCmd.AddCommand(importMappingsCommand)
 
