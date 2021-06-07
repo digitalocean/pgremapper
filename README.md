@@ -165,14 +165,15 @@ $ ./pgremapper drain 15 --target-osds bucket:data12 --allow-movement-across host
 
 Export all upmaps for the given OSD spec(s) in a json format usable by import-mappings. Useful for keeping the state of existing mappings to restore after destroying a number of OSDs, or any other CRUSH change that will cause upmap items to be cleaned up by the mons.
 
-Note that the mappings exported will be just the portions of the upmap items pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the mapping).
+Note that the mappings exported will be just the portions of the upmap items pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the mapping), unless `--whole-pg` is specified.
 
 ```
-$ ./pgremapper export-mappings <osdspec> ... [--output <file>]
+$ ./pgremapper export-mappings <osdspec> ... [--output <file>] [--whole-pg]
 ```
 
 * `<osdspec> ...`: The OSDs for which mappings will be exported.
 * `--output`: Write output to the given file path instead of `stdout`.
+* `--whole-pg`: Export all mappings for any PGs that include the given OSD(s), not just the portions pertaining to those OSDs.
 
 ### import-mappings
 
