@@ -323,22 +323,38 @@ func pgDumpPgsBrief() []*pgBriefItem {
 		pgBriefs = pgBriefNautilusOut.PgStats
 	}
 
+	puis := pgUpmapItemMap()
 	for _, pgb := range pgBriefs {
-		reorderUpToMatchActing(pgb.Up, pgb.Acting)
+		reorderUpToMatchActing(puis[pgb.PgID], pgb.Up, pgb.Acting)
 	}
 
 	return pgBriefs
 }
 
-func reorderUpToMatchActing(up, acting []int) {
+func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
+	if pui == nil {
+		pui = &pgUpmapItem{}
+	}
+
 	// Re-order the up list so that any OSDs in it that are also in the
-	// acting list are in the same place. This should never do anything for
-	// EC pools, where the order matters and won't change, but for
-	// replicated pools the order can change and this doesn't imply data
-	// movement.
+	// acting list are in the same place. We also need to take into account
+	// upmap items which create relationships between the up and acting
+	// OSDs. This should never do anything for EC pools, where the order
+	// matters and won't change, but for replicated pools the order can
+	// change and this doesn't imply data movement.
 	for ai, osd := range acting {
+		fromOsd := invalidOSD
 		for ui := range up {
-			if up[ui] != osd {
+			// If this PG is in backfill, it could be because of an
+			// upmap item. Find any such matching mapping and
+			// consider its source OSD when matching against this
+			// acting OSD.
+			for _, mp := range pui.Mappings {
+				if mp.To == up[ui] {
+					fromOsd = mp.From
+				}
+			}
+			if up[ui] != osd && (fromOsd == invalidOSD || fromOsd != osd) {
 				continue
 			}
 			if ui == ai {
@@ -347,8 +363,9 @@ func reorderUpToMatchActing(up, acting []int) {
 			}
 			// Swap whatever's at the acting set index with
 			// this OSD.
+			tmp := up[ui]
 			up[ui] = up[ai]
-			up[ai] = osd
+			up[ai] = tmp
 			break
 		}
 	}
@@ -361,6 +378,17 @@ func osdDump() *osdDumpOut {
 	mustParseCephCommand(jsonOut, err, &out)
 
 	return &out
+}
+
+func pgUpmapItemMap() map[string]*pgUpmapItem {
+	osdDumpOut := osdDump()
+
+	puis := make(map[string]*pgUpmapItem)
+	for _, pui := range osdDumpOut.PgUpmapItems {
+		puis[pui.PgID] = pui
+	}
+
+	return puis
 }
 
 func osdTree() *parsedOsdTree {

@@ -622,6 +622,7 @@ func getCephStatus() (*cephStatus, error) {
 
 func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, includedOsds, pgsIncludingOsds map[int]struct{}) {
 	pgBriefs := pgDumpPgsBrief()
+	puis := pgUpmapItemMap()
 
 	excluded := func(osd int) bool {
 		_, ok := excludedOsds[osd]
@@ -666,7 +667,7 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, include
 						// acting set via a PG query.
 						pqo := pgQuery(id)
 						acting = pqo.getCompletePeers()
-						reorderUpToMatchActing(up, acting)
+						reorderUpToMatchActing(puis[pgb.PgID], up, acting)
 						break
 					}
 				}
@@ -1004,7 +1005,9 @@ func confirmProceed() bool {
 		return true
 	}
 
+	fmt.Println("The following changes would be made to the upmap exception table:")
 	fmt.Println(M.String())
+	fmt.Println("No changes made - use --yes to apply changes.")
 
 	return false
 }
