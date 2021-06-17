@@ -622,6 +622,7 @@ func getCephStatus() (*cephStatus, error) {
 
 func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, includedOsds, pgsIncludingOsds map[int]struct{}) {
 	pgBriefs := pgDumpPgsBrief()
+	puis := pgUpmapItemMap()
 
 	excluded := func(osd int) bool {
 		_, ok := excludedOsds[osd]
@@ -666,7 +667,7 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, include
 						// acting set via a PG query.
 						pqo := pgQuery(id)
 						acting = pqo.getCompletePeers()
-						reorderUpToMatchActing(up, acting)
+						reorderUpToMatchActing(puis[pgb.PgID], up, acting)
 						break
 					}
 				}

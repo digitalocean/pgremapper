@@ -41,14 +41,16 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
  { "pgid": "1.8f", "up": [ 33, 36, 30], "acting": [ 33, 37, 31 ], "state": "backfill_wait" },
  { "pgid": "1.90", "up": [ 33, 36, 30], "acting": [ 33, 37, 31 ], "state": "backfill_wait" },
  { "pgid": "1.91", "up": [ 33, 36, 30], "acting": [ 33, 37, 2147483647 ], "state": "backfill_wait" },
- { "pgid": "1.92", "up": [ 3, 6, 1], "acting": [ 1, 2147483647, 3 ], "state": "backfill_wait" }
+ { "pgid": "1.92", "up": [ 3, 6, 1], "acting": [ 1, 2147483647, 3 ], "state": "backfill_wait" },
+ { "pgid": "1.93", "up": [ 1, 4, 5], "acting": [ 1, 2, 3 ], "state": "backfill_wait" }
 ]
 `
 	osdDumpOut := `
 {
   "pg_upmap_items": [
     { "pgid": "1.8f", "mappings": [ { "from": 37, "to": 36 } ] },
-    { "pgid": "1.90", "mappings": [ { "from": 37, "to": 36 }, { "from": 31, "to": 30 } ] }
+    { "pgid": "1.90", "mappings": [ { "from": 37, "to": 36 }, { "from": 31, "to": 30 } ] },
+    { "pgid": "1.93", "mappings": [ { "from": 3, "to": 4 }, { "from": 2, "to": 5 } ] }
   ]
 }
 `
@@ -126,6 +128,7 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 				{ID: "1.8f", Mappings: []mapping{{From: 30, To: 31, dirty: true}}},
 				{ID: "1.90", Mappings: []mapping{}},
 				{ID: "1.91", Mappings: []mapping{{From: 36, To: 37, dirty: true}, {From: 30, To: 38, dirty: true}}},
+				{ID: "1.93", Mappings: []mapping{}},
 			},
 		},
 		{

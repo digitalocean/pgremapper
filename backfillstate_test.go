@@ -29,6 +29,7 @@ func TestBackfillState(t *testing.T) {
  { "pgid": "1.04", "up": [ 8, 5, 6 ],  "acting": [ 77, 5, 7 ] }
 ]
 `
+	runOsdDump = func() (string, error) { return "{}", nil }
 	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
 
 	bs := mustGetCurrentBackfillState()
