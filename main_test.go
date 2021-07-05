@@ -685,13 +685,14 @@ func TestParseMaxBackfillReservations(t *testing.T) {
 {
   "nodes": [
     {
-      "children": [ 0, 1 ],
+      "children": [ 0, 1, 2 ],
       "type": "host",
       "name": "host1",
       "id": -4
     },
-    { "type": "osd", "name": "osd.0", "id": 0 },
-    { "type": "osd", "name": "osd.1", "id": 1 }
+    { "type": "osd", "name": "osd.0", "id": 0, "reweight": 0.123 },
+    { "type": "osd", "name": "osd.1", "id": 1, "reweight": 1.00000 },
+    { "type": "osd", "name": "osd.2", "id": 2, "reweight": 0 }
   ]
 }
 `
@@ -705,6 +706,7 @@ func TestParseMaxBackfillReservations(t *testing.T) {
 	mustParseMaxBackfillReservations(cmd)
 
 	require.Equal(t, 10, M.bs.getMaxBackfillReservations(1))
+	// 'out' OSDs are excluded from osdspecs.
 	require.Equal(t, 4, M.bs.getMaxBackfillReservations(2))
 	require.Equal(t, 6, M.bs.getMaxBackfillReservations(133))
 }
