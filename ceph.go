@@ -57,10 +57,11 @@ type osdDumpOut struct {
 }
 
 type osdTreeOutNode struct {
-	ID       int    `json:"id"`
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	Children []int  `json:"children"`
+	ID       int     `json:"id"`
+	Type     string  `json:"type"`
+	Name     string  `json:"name"`
+	Reweight float64 `json:"reweight"`
+	Children []int   `json:"children"`
 }
 
 type osdTreeOut struct {
@@ -68,9 +69,10 @@ type osdTreeOut struct {
 }
 
 type osdTreeNode struct {
-	ID   int
-	Name string
-	Type string
+	ID       int
+	Name     string
+	Type     string
+	Reweight float64
 
 	Parent   *osdTreeNode
 	Children []*osdTreeNode
@@ -283,6 +285,10 @@ func getOsdsForBucket(bucket string) ([]int, error) {
 			osds = append(osds, mustGetOsdsForBucket(c.Name)...)
 			continue
 		}
+		if c.Reweight == 0 {
+			// This OSD is 'out' - exclude it.
+			continue
+		}
 		osds = append(osds, c.ID)
 	}
 	return osds, nil
@@ -405,9 +411,10 @@ func osdTree() *parsedOsdTree {
 	// First, build direct lookup mappings.
 	for _, n := range out.Nodes {
 		node := &osdTreeNode{
-			ID:   n.ID,
-			Name: n.Name,
-			Type: n.Type,
+			ID:       n.ID,
+			Name:     n.Name,
+			Type:     n.Type,
+			Reweight: n.Reweight,
 		}
 		tree.IDToNode[n.ID] = node
 		tree.NameToNode[n.Name] = node
