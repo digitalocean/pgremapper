@@ -980,8 +980,12 @@ func run(command ...string) (string, error) {
 	stdout, err := cmd.Output()
 
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to execute command: %s",
-			strings.Join(command, " "))
+		stderr := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = fmt.Sprintf("\nstderr:\n%s", ee.Stderr)
+		}
+		return "", errors.Wrapf(err, "failed to execute command: %s%s",
+			strings.Join(command, " "), stderr)
 	}
 
 	return string(stdout), nil
