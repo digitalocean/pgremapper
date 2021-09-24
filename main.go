@@ -688,7 +688,11 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, include
 				// Calculate acting set difference and remap to
 				// avoid any ensuing backfill.
 				for i := range acting {
-					if up[i] != acting[i] && acting[i] != invalidOSD {
+					if up[i] != acting[i] {
+						if up[i] == invalidOSD || acting[i] == invalidOSD {
+							continue
+						}
+
 						if excluded(up[i]) || excluded(acting[i]) {
 							continue
 						}
