@@ -872,6 +872,7 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 	// OSD is primary), and thus apply a weight to it.
 	for _, m := range candidateMappings {
 		if !M.bs.hasRoomForRemap(m.PgID, m.Mapping.From, m.Mapping.To) {
+			M.changeState = updateChangeState(NoReservationAvailable)
 			continue
 		}
 
@@ -1004,8 +1005,12 @@ func runOrDie(command ...string) string {
 }
 
 func confirmProceed() bool {
-	if !M.dirty {
+	switch M.changeState {
+	case NoChange:
 		fmt.Fprintf(os.Stderr, "nothing to do\n")
+		return false
+	case NoReservationAvailable:
+		fmt.Fprintf(os.Stderr, "change possible but no backfill reservation available, try later\n")
 		return false
 	}
 

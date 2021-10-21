@@ -21,12 +21,31 @@ import (
 	"sync"
 )
 
+// changeStateType determines if changes can and should happen
+type changeStateType int
+
+const (
+	// NoChange -> no upmap changes
+	NoChange changeStateType = iota
+	// NoReservationAvailable -> upmap change should happen but no backfill reservation is available
+	NoReservationAvailable
+	// ChangesPending -> upmap changes are available
+	ChangesPending
+)
+
 type mappingState struct {
 	pgUpmapItems []*pgUpmapItem // This is always sorted for predictability and repeatability.
 	bs           *backfillState
-	dirty        bool
+	changeState  changeStateType
 
 	l sync.Mutex
+}
+
+func updateChangeState(wantedState changeStateType) changeStateType {
+	if wantedState > M.changeState {
+		return wantedState
+	}
+	return M.changeState
 }
 
 func mustGetCurrentMappingState() *mappingState {
@@ -54,7 +73,7 @@ func (m *mappingState) remap(pgid string, from, to int) {
 	m.bs.accountForRemap(pgid, from, to)
 
 	pui.dirty = true
-	m.dirty = true
+	m.changeState = ChangesPending
 
 	for i, m := range pui.Mappings {
 		if m.From == to && m.To == from {
