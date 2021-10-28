@@ -328,6 +328,7 @@ func pgDumpPgsBrief() []*pgBriefItem {
 		}
 		pgBriefs = pgBriefNautilusOut.PgStats
 	}
+	pgBriefs = sanitizePgBriefs(pgBriefs)
 
 	puis := pgUpmapItemMap()
 	for _, pgb := range pgBriefs {
@@ -335,6 +336,46 @@ func pgDumpPgsBrief() []*pgBriefItem {
 	}
 
 	return pgBriefs
+}
+
+func sanitizePgBriefs(pgBriefs []*pgBriefItem) []*pgBriefItem {
+	duplicateMessage := "WARNING: PG %s's %s set has one or more duplicated OSD IDs; this PG will be excluded from operations and reservation calculations. Please check your CRUSH rules and map.\n"
+	sanitized := make([]*pgBriefItem, 0, len(pgBriefs))
+
+	for _, pgBrief := range pgBriefs {
+		if len(pgBrief.Up) != len(pgBrief.Acting) {
+			fmt.Printf("WARNING: PG %s's up and acting sets have mismatched lengths (%d vs. %d), perhaps due to a change in CRUSH rules; this PG will be excluded from operations and reservation calculations.\n", pgBrief.PgID, len(pgBrief.Up), len(pgBrief.Acting))
+			continue
+		}
+
+		if hasDuplicateOSDID(pgBrief.Acting) {
+			fmt.Printf(duplicateMessage, pgBrief.PgID, "acting")
+			continue
+		}
+
+		if hasDuplicateOSDID(pgBrief.Up) {
+			fmt.Printf(duplicateMessage, pgBrief.PgID, "up")
+			continue
+		}
+
+		sanitized = append(sanitized, pgBrief)
+	}
+
+	return sanitized
+}
+
+func hasDuplicateOSDID(osdids []int) bool {
+	for i, osdid := range osdids {
+		for j, otherOSDID := range osdids {
+			if i == j {
+				continue
+			}
+			if osdid == otherOSDID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
