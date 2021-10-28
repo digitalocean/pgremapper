@@ -47,7 +47,7 @@ go get github.com/digitalocean/pgremapper
 
 Otherwise, clone this repository and use a golang Docker container to build:
 ```
-docker run -v $(pwd):/pgremapper -w /pgremapper golang:1.16.3 go build -o pgremapper .
+docker run --rm -v $(pwd):/pgremapper -w /pgremapper golang:1.17.2 go build -o pgremapper .
 ```
 
 ## Usage
