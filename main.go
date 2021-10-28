@@ -1020,6 +1020,7 @@ func confirmProceed() bool {
 
 	fmt.Println("The following changes would be made to the upmap exception table:")
 	fmt.Println(M.String())
+	fmt.Println()
 	fmt.Println("No changes made - use --yes to apply changes.")
 
 	return false

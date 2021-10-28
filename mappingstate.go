@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/fatih/color"
 )
 
 // changeStateType determines if changes can and should happen
@@ -235,6 +237,15 @@ func (m *mappingState) String() string {
 	strs := []string{}
 	for _, pui := range m.dirtyUpmapItems() {
 		strs = append(strs, pui.String())
+	}
+	if len(strs) > 0 {
+		strs = append(strs,
+			fmt.Sprintf("Color legend (for terminals that support it): %s - %s - %s",
+				color.New(color.FgGreen).Sprint("new mapping"),
+				color.New(color.FgRed).Sprint("removed mapping"),
+				"kept mapping",
+			),
+		)
 	}
 	return strings.Join(strs, "\n")
 }

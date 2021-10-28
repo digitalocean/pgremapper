@@ -218,7 +218,18 @@ func (otn *osdTreeNode) mustGetNearestParentOfType(t string) *osdTreeNode {
 }
 
 func (pui *pgUpmapItem) String() string {
-	fmtMappingList := func(list []mapping, a color.Attribute) string {
+	str := fmt.Sprintf("pg %s: [", pui.PgID)
+	printedMappings := false
+
+	fmtMappingList := func(list []mapping, a color.Attribute) {
+		if len(list) == 0 {
+			return
+		}
+
+		if printedMappings {
+			str += ","
+		}
+
 		c := color.New(a).SprintFunc()
 		strList := make([]string, len(list))
 		for i, item := range list {
@@ -229,19 +240,13 @@ func (pui *pgUpmapItem) String() string {
 			strList[i] = s
 		}
 
-		return strings.Join(strList, ",")
+		str += strings.Join(strList, ",")
+		printedMappings = true
 	}
 
-	str := fmt.Sprintf("pg %s: [", pui.PgID)
-	if len(pui.Mappings) > 0 {
-		str += fmtMappingList(pui.Mappings, color.FgGreen)
-	}
-	if len(pui.removedMappings) > 0 {
-		if len(pui.Mappings) > 0 {
-			str += ","
-		}
-		str += fmtMappingList(pui.removedMappings, color.FgRed)
-	}
+	fmtMappingList(pui.Mappings, color.FgGreen)
+	fmtMappingList(pui.removedMappings, color.FgRed)
+
 	str += "]"
 	return str
 }
