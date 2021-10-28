@@ -176,6 +176,7 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			defer teardownTest(t)
 			M = mustGetCurrentMappingState()
 
 			excludeOsds := make(map[int]struct{})
@@ -202,6 +203,7 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 }
 
 func TestCountCurrentBackfills(t *testing.T) {
+	defer teardownTest(t)
 	out := `
 [
  { "pgid": "1.32", "up": [ 7, 5, 9], "acting": [ 7, 5, 9 ] },
@@ -299,6 +301,7 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
 
 	t.Run("source OSDs specified", func(t *testing.T) {
+		defer teardownTest(t)
 		maxSourceBackfills := 3
 		sourceOsds := []int{1, 2, 5, 7}
 		expected := []expectedMapping{
@@ -316,6 +319,7 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 	})
 
 	t.Run("target OSDs specified", func(t *testing.T) {
+		defer teardownTest(t)
 		maxSourceBackfills := 2
 		targetOsds := []int{1, 6}
 		expected := []expectedMapping{
@@ -331,6 +335,7 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 	})
 
 	t.Run("max-backfills specified", func(t *testing.T) {
+		defer teardownTest(t)
 		targetOsds := []int{0}
 		expected := []expectedMapping{
 			{ID: "1.33", Mappings: nil},
@@ -436,6 +441,7 @@ func TestCalcPgMappingsToBalanceHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			defer teardownTest(t)
 			M = mustGetCurrentMappingState()
 
 			calcPgMappingsToBalanceOsds(
@@ -594,7 +600,6 @@ func TestCalcPgMappingsToDrainOsd(t *testing.T) {
 	runOsdDump = func() (string, error) { return osdDumpOut, nil }
 	runOsdTree = func() (string, error) { return osdTreeOut, nil }
 	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
-	defer func() { _cachedOsdTree = nil }()
 
 	sourceOsd := 0
 	maxSourceBackfills := 5
@@ -660,6 +665,7 @@ func TestCalcPgMappingsToDrainOsd(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			defer teardownTest(t)
 			M = mustGetCurrentMappingState()
 			M.bs.maxBackfillsFrom = maxSourceBackfills
 			calcPgMappingsToDrainOsd(
@@ -689,6 +695,7 @@ func validateDirtyMappings(t *testing.T, expected []expectedMapping) {
 }
 
 func TestParseMaxBackfillReservations(t *testing.T) {
+	defer teardownTest(t)
 	osdTreeOut := `
 {
   "nodes": [
@@ -705,7 +712,6 @@ func TestParseMaxBackfillReservations(t *testing.T) {
 }
 `
 	runOsdTree = func() (string, error) { return osdTreeOut, nil }
-	defer func() { _cachedOsdTree = nil }()
 
 	cmd := &cobra.Command{}
 	cmd.Flags().StringSlice("max-backfill-reservations", []string{"4", "bucket:host1:10", "133:6"}, "")
@@ -717,4 +723,10 @@ func TestParseMaxBackfillReservations(t *testing.T) {
 	// 'out' OSDs are excluded from osdspecs.
 	require.Equal(t, 4, M.bs.getMaxBackfillReservations(2))
 	require.Equal(t, 6, M.bs.getMaxBackfillReservations(133))
+}
+
+func teardownTest(t *testing.T) {
+	savedOsdDumpOut = nil
+	savedParsedOsdTree = nil
+	savedPgDumpPgsBrief = nil
 }

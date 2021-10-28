@@ -272,7 +272,7 @@ func mustGetOsdsForBucket(bucket string) []int {
 }
 
 func getOsdsForBucket(bucket string) ([]int, error) {
-	tree := cachedOsdTree()
+	tree := osdTree()
 
 	bucketNode, ok := tree.NameToNode[bucket]
 	if !ok {
@@ -312,7 +312,13 @@ func countCurrentBackfills() (map[int]int, map[int]int) {
 	return sourceBackfillCounts, targetBackfillCounts
 }
 
+var savedPgDumpPgsBrief []*pgBriefItem
+
 func pgDumpPgsBrief() []*pgBriefItem {
+	if len(savedPgDumpPgsBrief) > 0 {
+		return savedPgDumpPgsBrief
+	}
+
 	out, err := runPgDumpPgsBrief()
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
@@ -335,6 +341,7 @@ func pgDumpPgsBrief() []*pgBriefItem {
 		reorderUpToMatchActing(puis[pgb.PgID], pgb.Up, pgb.Acting)
 	}
 
+	savedPgDumpPgsBrief = pgBriefs
 	return pgBriefs
 }
 
@@ -418,12 +425,19 @@ func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
 	}
 }
 
+var savedOsdDumpOut *osdDumpOut
+
 func osdDump() *osdDumpOut {
+	if savedOsdDumpOut != nil {
+		return savedOsdDumpOut
+	}
+
 	var out osdDumpOut
 
 	jsonOut, err := runOsdDump()
 	mustParseCephCommand(jsonOut, err, &out)
 
+	savedOsdDumpOut = &out
 	return &out
 }
 
@@ -438,7 +452,13 @@ func pgUpmapItemMap() map[string]*pgUpmapItem {
 	return puis
 }
 
+var savedParsedOsdTree *parsedOsdTree
+
 func osdTree() *parsedOsdTree {
+	if savedParsedOsdTree != nil {
+		return savedParsedOsdTree
+	}
+
 	var out osdTreeOut
 
 	jsonOut, err := runOsdTree()
@@ -472,16 +492,8 @@ func osdTree() *parsedOsdTree {
 		}
 	}
 
+	savedParsedOsdTree = tree
 	return tree
-}
-
-var _cachedOsdTree *parsedOsdTree
-
-func cachedOsdTree() *parsedOsdTree {
-	if _cachedOsdTree == nil {
-		_cachedOsdTree = osdTree()
-	}
-	return _cachedOsdTree
 }
 
 func pgQuery(pgid string) *pgQueryOut {
