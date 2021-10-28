@@ -222,7 +222,7 @@ func (pui *pgUpmapItem) String() string {
 	str := fmt.Sprintf("pg %s: [", pui.PgID)
 	printedMappings := false
 
-	fmtMappingList := func(list []mapping, a color.Attribute) {
+	fmtMappingList := func(list []mapping, prefix string, a color.Attribute) {
 		if len(list) == 0 {
 			return
 		}
@@ -236,7 +236,7 @@ func (pui *pgUpmapItem) String() string {
 		for i, item := range list {
 			s := item.String()
 			if item.dirty {
-				s = c(s)
+				s = c(prefix + s)
 			}
 			strList[i] = s
 		}
@@ -245,9 +245,9 @@ func (pui *pgUpmapItem) String() string {
 		printedMappings = true
 	}
 
-	fmtMappingList(pui.Mappings, color.FgGreen)
-	fmtMappingList(pui.removedMappings, color.FgRed)
-	fmtMappingList(pui.staleMappings, color.FgYellow)
+	fmtMappingList(pui.Mappings, "+", color.FgGreen)
+	fmtMappingList(pui.removedMappings, "-", color.FgRed)
+	fmtMappingList(pui.staleMappings, "!", color.FgYellow)
 
 	str += "]"
 	return str

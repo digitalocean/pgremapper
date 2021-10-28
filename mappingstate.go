@@ -279,10 +279,10 @@ func (m *mappingState) String() string {
 	}
 	if len(strs) > 0 {
 		strs = append(strs,
-			fmt.Sprintf("Color legend (for terminals that support it): %s - %s - %s - %s",
-				color.New(color.FgGreen).Sprint("new mapping"),
-				color.New(color.FgRed).Sprint("removed mapping"),
-				color.New(color.FgYellow).Sprint("stale mapping (will be removed)"),
+			fmt.Sprintf("Legend: %s - %s - %s - %s",
+				color.New(color.FgGreen).Sprint("+new mapping"),
+				color.New(color.FgRed).Sprint("-removed mapping"),
+				color.New(color.FgYellow).Sprint("!stale mapping (will be removed)"),
 				"kept mapping",
 			),
 		)
