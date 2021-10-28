@@ -328,6 +328,7 @@ func pgDumpPgsBrief() []*pgBriefItem {
 		}
 		pgBriefs = pgBriefNautilusOut.PgStats
 	}
+	pgBriefs = sanitizePgBriefs(pgBriefs)
 
 	puis := pgUpmapItemMap()
 	for _, pgb := range pgBriefs {
@@ -335,6 +336,20 @@ func pgDumpPgsBrief() []*pgBriefItem {
 	}
 
 	return pgBriefs
+}
+
+func sanitizePgBriefs(pgBriefs []*pgBriefItem) []*pgBriefItem {
+	sanitized := make([]*pgBriefItem, 0, len(pgBriefs))
+
+	for _, pgBrief := range pgBriefs {
+		if len(pgBrief.Up) != len(pgBrief.Acting) {
+			fmt.Printf("WARNING: PG %s's up and acting sets have mismatched lengths (%d vs. %d), perhaps due to a change in CRUSH rules; this PG will be excluded from operations and reservation calculations.\n", pgBrief.PgID, len(pgBrief.Up), len(pgBrief.Acting))
+			continue
+		}
+		sanitized = append(sanitized, pgBrief)
+	}
+
+	return sanitized
 }
 
 func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {

@@ -23,6 +23,8 @@ import (
 )
 
 func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
+	// Corner-case PG states included to ensure we handle them gracefully:
+	// * 1.999[01]: up and acting sets have different lengths
 	pgDumpOut := `
 [
  { "pgid": "1.32", "up": [ 7, 5, 9], "acting": [ 7, 5, 9 ] },
@@ -42,7 +44,10 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
  { "pgid": "1.90", "up": [ 33, 36, 30], "acting": [ 33, 37, 31 ], "state": "backfill_wait" },
  { "pgid": "1.91", "up": [ 33, 36, 30], "acting": [ 33, 37, 2147483647 ], "state": "backfill_wait" },
  { "pgid": "1.92", "up": [ 3, 6, 1], "acting": [ 1, 2147483647, 3 ], "state": "backfill_wait" },
- { "pgid": "1.93", "up": [ 1, 4, 5], "acting": [ 1, 2, 3 ], "state": "backfill_wait" }
+ { "pgid": "1.93", "up": [ 1, 4, 5], "acting": [ 1, 2, 3 ], "state": "backfill_wait" },
+
+ { "pgid": "1.9990", "up": [ 1 ], "acting": [ 1, 2, 3 ], "state": "backfill_wait" },
+ { "pgid": "1.9991", "up": [ 1, 2, 3 ], "acting": [ 1 ], "state": "backfill_wait" }
 ]
 `
 	osdDumpOut := `
