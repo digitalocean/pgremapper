@@ -21,6 +21,7 @@ import (
 )
 
 func TestGetMappings(t *testing.T) {
+	defer teardownTest(t)
 	pgDumpOut := `
 [
  { "pgid": "1.1", "up": [ 1, 2, 4 ], "acting": [ 1, 2, 3 ], "state": "backfill_wait" },

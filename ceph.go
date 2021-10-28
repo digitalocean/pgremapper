@@ -44,6 +44,7 @@ type pgUpmapItem struct {
 	Mappings []mapping `json:"mappings"`
 
 	removedMappings []mapping
+	staleMappings   []mapping
 	dirty           bool
 }
 
@@ -218,30 +219,36 @@ func (otn *osdTreeNode) mustGetNearestParentOfType(t string) *osdTreeNode {
 }
 
 func (pui *pgUpmapItem) String() string {
-	fmtMappingList := func(list []mapping, a color.Attribute) string {
+	str := fmt.Sprintf("pg %s: [", pui.PgID)
+	printedMappings := false
+
+	fmtMappingList := func(list []mapping, prefix string, a color.Attribute) {
+		if len(list) == 0 {
+			return
+		}
+
+		if printedMappings {
+			str += ","
+		}
+
 		c := color.New(a).SprintFunc()
 		strList := make([]string, len(list))
 		for i, item := range list {
 			s := item.String()
 			if item.dirty {
-				s = c(s)
+				s = c(prefix + s)
 			}
 			strList[i] = s
 		}
 
-		return strings.Join(strList, ",")
+		str += strings.Join(strList, ",")
+		printedMappings = true
 	}
 
-	str := fmt.Sprintf("pg %s: [", pui.PgID)
-	if len(pui.Mappings) > 0 {
-		str += fmtMappingList(pui.Mappings, color.FgGreen)
-	}
-	if len(pui.removedMappings) > 0 {
-		if len(pui.Mappings) > 0 {
-			str += ","
-		}
-		str += fmtMappingList(pui.removedMappings, color.FgRed)
-	}
+	fmtMappingList(pui.Mappings, "+", color.FgGreen)
+	fmtMappingList(pui.removedMappings, "-", color.FgRed)
+	fmtMappingList(pui.staleMappings, "!", color.FgYellow)
+
 	str += "]"
 	return str
 }
@@ -272,7 +279,7 @@ func mustGetOsdsForBucket(bucket string) []int {
 }
 
 func getOsdsForBucket(bucket string) ([]int, error) {
-	tree := cachedOsdTree()
+	tree := osdTree()
 
 	bucketNode, ok := tree.NameToNode[bucket]
 	if !ok {
@@ -312,7 +319,13 @@ func countCurrentBackfills() (map[int]int, map[int]int) {
 	return sourceBackfillCounts, targetBackfillCounts
 }
 
+var savedPgDumpPgsBrief []*pgBriefItem
+
 func pgDumpPgsBrief() []*pgBriefItem {
+	if len(savedPgDumpPgsBrief) > 0 {
+		return savedPgDumpPgsBrief
+	}
+
 	out, err := runPgDumpPgsBrief()
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
@@ -335,6 +348,7 @@ func pgDumpPgsBrief() []*pgBriefItem {
 		reorderUpToMatchActing(puis[pgb.PgID], pgb.Up, pgb.Acting)
 	}
 
+	savedPgDumpPgsBrief = pgBriefs
 	return pgBriefs
 }
 
@@ -378,6 +392,17 @@ func hasDuplicateOSDID(osdids []int) bool {
 	return false
 }
 
+func pgBriefMap() map[string]*pgBriefItem {
+	pgBriefs := pgDumpPgsBrief()
+
+	pgBriefMap := make(map[string]*pgBriefItem)
+	for _, pgb := range pgBriefs {
+		pgBriefMap[pgb.PgID] = pgb
+	}
+
+	return pgBriefMap
+}
+
 func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
 	if pui == nil {
 		pui = &pgUpmapItem{}
@@ -418,12 +443,19 @@ func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
 	}
 }
 
+var savedOsdDumpOut *osdDumpOut
+
 func osdDump() *osdDumpOut {
+	if savedOsdDumpOut != nil {
+		return savedOsdDumpOut
+	}
+
 	var out osdDumpOut
 
 	jsonOut, err := runOsdDump()
 	mustParseCephCommand(jsonOut, err, &out)
 
+	savedOsdDumpOut = &out
 	return &out
 }
 
@@ -438,7 +470,13 @@ func pgUpmapItemMap() map[string]*pgUpmapItem {
 	return puis
 }
 
+var savedParsedOsdTree *parsedOsdTree
+
 func osdTree() *parsedOsdTree {
+	if savedParsedOsdTree != nil {
+		return savedParsedOsdTree
+	}
+
 	var out osdTreeOut
 
 	jsonOut, err := runOsdTree()
@@ -472,16 +510,8 @@ func osdTree() *parsedOsdTree {
 		}
 	}
 
+	savedParsedOsdTree = tree
 	return tree
-}
-
-var _cachedOsdTree *parsedOsdTree
-
-func cachedOsdTree() *parsedOsdTree {
-	if _cachedOsdTree == nil {
-		_cachedOsdTree = osdTree()
-	}
-	return _cachedOsdTree
 }
 
 func pgQuery(pgid string) *pgQueryOut {

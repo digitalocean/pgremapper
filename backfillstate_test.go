@@ -21,6 +21,7 @@ import (
 )
 
 func TestBackfillState(t *testing.T) {
+	defer teardownTest(t)
 	pgDumpOut := `
 [
  { "pgid": "1.01", "up": [ 77, 1, 2 ], "acting": [ 77, 1, 2 ] },

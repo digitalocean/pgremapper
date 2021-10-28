@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/fatih/color"
 )
 
 // changeStateType determines if changes can and should happen
@@ -52,9 +54,48 @@ func mustGetCurrentMappingState() *mappingState {
 	osdDumpOut := osdDump()
 	items := osdDumpOut.PgUpmapItems
 	sort.Slice(items, func(i, j int) bool { return items[i].PgID < items[j].PgID })
+	sanitizeStaleUpmaps(items)
 	return &mappingState{
 		pgUpmapItems: osdDumpOut.PgUpmapItems,
 		bs:           mustGetCurrentBackfillState(),
+	}
+}
+
+func sanitizeStaleUpmaps(puis []*pgUpmapItem) {
+	pgBriefs := pgBriefMap()
+
+	hasOSD := func(osdids []int, osdid int) bool {
+		for _, otherOSDID := range osdids {
+			if osdid == otherOSDID {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, pui := range puis {
+		pgBrief, ok := pgBriefs[pui.PgID]
+		if !ok {
+			continue
+		}
+
+		finalMappings := []mapping{}
+		for _, m := range pui.Mappings {
+			if hasOSD(pgBrief.Up, m.From) || !hasOSD(pgBrief.Up, m.To) {
+				// This mapping has no effect on the PG and is
+				// thus stale, but Ceph hasn't cleaned it up.
+				// It will get in the way of our own decision
+				// making, so let's act like it's not there. We
+				// won't mark the whole pui dirty because we
+				// don't want to update Ceph's exception table
+				// unless there are real changes to make.
+				m.dirty = true
+				pui.staleMappings = append(pui.staleMappings, m)
+				continue
+			}
+			finalMappings = append(finalMappings, m)
+		}
+		pui.Mappings = finalMappings
 	}
 }
 
@@ -235,6 +276,16 @@ func (m *mappingState) String() string {
 	strs := []string{}
 	for _, pui := range m.dirtyUpmapItems() {
 		strs = append(strs, pui.String())
+	}
+	if len(strs) > 0 {
+		strs = append(strs,
+			fmt.Sprintf("Legend: %s - %s - %s - %s",
+				color.New(color.FgGreen).Sprint("+new mapping"),
+				color.New(color.FgRed).Sprint("-removed mapping"),
+				color.New(color.FgYellow).Sprint("!stale mapping (will be removed)"),
+				"kept mapping",
+			),
+		)
 	}
 	return strings.Join(strs, "\n")
 }

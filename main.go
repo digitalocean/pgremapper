@@ -157,7 +157,7 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 			mustParseMaxSourceBackfills(cmd)
 			targetOsds := mustGetOsdSpecSlice(cmd, "target-osds")
 
-			tree := cachedOsdTree()
+			tree := osdTree()
 			sourceOsdNode, ok := tree.IDToNode[sourceOsd]
 			if !ok || sourceOsdNode.Type != "osd" {
 				panic(fmt.Errorf("source OSD %d doesn't exist", sourceOsd))
@@ -789,7 +789,7 @@ func isCandidateMapping(
 		return false
 	}
 
-	tree := cachedOsdTree()
+	tree := osdTree()
 	sourceOsdNode := tree.IDToNode[sourceOsd]
 	targetOsdNode := tree.IDToNode[targetOsd]
 
@@ -1020,6 +1020,7 @@ func confirmProceed() bool {
 
 	fmt.Println("The following changes would be made to the upmap exception table:")
 	fmt.Println(M.String())
+	fmt.Println()
 	fmt.Println("No changes made - use --yes to apply changes.")
 
 	return false
