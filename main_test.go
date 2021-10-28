@@ -53,9 +53,12 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
  { "pgid": "1.9993", "up": [ 1, 4, 4 ], "acting": [ 1, 2, 3 ], "state": "backfill_wait" }
 ]
 `
+	// PG 1.33 has a stale and invalid upmap entry like we've seen left
+	// behind by Ceph sometimes - both its from and to are in the up set.
 	osdDumpOut := `
 {
   "pg_upmap_items": [
+    { "pgid": "1.33", "mappings": [ { "from": 0, "to": 10 } ] },
     { "pgid": "1.8f", "mappings": [ { "from": 37, "to": 36 } ] },
     { "pgid": "1.90", "mappings": [ { "from": 37, "to": 36 }, { "from": 31, "to": 30 } ] },
     { "pgid": "1.93", "mappings": [ { "from": 3, "to": 4 }, { "from": 2, "to": 5 } ] }

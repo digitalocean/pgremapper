@@ -26,8 +26,7 @@ We've used `pgremapper` on a variety of versions of Luminous and Nautilus.
 
 ### Caveats
 
-* When running older versions of Luminous or Mimic, it's possible for stale upmap entries that have no effect to accumulate. `pgremapper` can become confused by these stale entries and fail. See the Requirements section above for recommended versions.
-* If the system is still processing osdmaps and peering, `pgremapper` can become confused and fail for pretty much the same reason as above (upmap entries at the mon layer may not yet be reflected in current PG state).
+* If the system is still processing osdmaps and peering, `pgremapper` can become confused and make incorrect decisions, since upmap entries at the mon layer may not yet be reflected in current PG state. If making CRUSH changes or running pgremapper multiple times, give the system time to finish processing osdmaps before running pgremapper.
 * Given a recent enough Ceph version, CRUSH cannot be violated by an upmap entry. This is good, but it can make certain manipulations impossible; consider a case where a backfill is swapping EC chunks between two racks. To the best of our knowledge today, no upmap entry can be created to counteract such a backfill, as Ceph will evaluate the correctness of the upmap entry in parts, rather than as a whole. (If you have evidence to the contrary or this is actually possible in newer versions of Ceph, let us know!)
 
 ### Bug Reports
@@ -65,6 +64,10 @@ $ ./pgremapper [--concurrency <n>] [--yes] [--verbose] <command>
 ### osdspec
 
 For commands or options that take a list of OSDs, `pgremapper` uses the concept of an `osdspec` (inspired by Git's `refspec`) to simplify the command line. An `osdspec` can either be an OSD ID (e.g. `42`) or a CRUSH bucket prefixed by `bucket:` (e.g. `bucket:rack1` or `bucket:host4`). In the latter case, all OSDs found under that CRUSH bucket are included.
+
+### diff output
+
+When `--yes` is not specified, `pgremapper` will make no changes to the system, and will print the proposed changes in a diff-like format. For many of the subcommands below, goals are accomplished through a combination of adding and removing mappings to and from the upmap exception table. Unchanged mappings, which will be left alone, or stale mappings, which will be removed, are also noted. (Stale mappings are those that currently have no effect and should probably have been cleaned up by Ceph; we've seen cases of these in all tested versions.)
 
 ### balance-bucket
 

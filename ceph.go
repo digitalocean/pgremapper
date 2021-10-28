@@ -44,6 +44,7 @@ type pgUpmapItem struct {
 	Mappings []mapping `json:"mappings"`
 
 	removedMappings []mapping
+	staleMappings   []mapping
 	dirty           bool
 }
 
@@ -246,6 +247,7 @@ func (pui *pgUpmapItem) String() string {
 
 	fmtMappingList(pui.Mappings, color.FgGreen)
 	fmtMappingList(pui.removedMappings, color.FgRed)
+	fmtMappingList(pui.staleMappings, color.FgYellow)
 
 	str += "]"
 	return str
@@ -388,6 +390,17 @@ func hasDuplicateOSDID(osdids []int) bool {
 		}
 	}
 	return false
+}
+
+func pgBriefMap() map[string]*pgBriefItem {
+	pgBriefs := pgDumpPgsBrief()
+
+	pgBriefMap := make(map[string]*pgBriefItem)
+	for _, pgb := range pgBriefs {
+		pgBriefMap[pgb.PgID] = pgb
+	}
+
+	return pgBriefMap
 }
 
 func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
