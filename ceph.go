@@ -380,6 +380,9 @@ func sanitizePgBriefs(pgBriefs []*pgBriefItem) []*pgBriefItem {
 
 func hasDuplicateOSDID(osdids []int) bool {
 	for i, osdid := range osdids {
+		if osdid == invalidOSD {
+			continue
+		}
 		for j, otherOSDID := range osdids {
 			if i == j {
 				continue
