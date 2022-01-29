@@ -67,7 +67,7 @@ or is undesirable. The given CRUSH bucket must directly contain OSDs.
 				return errors.New("a bucket must be specified")
 			}
 
-			if _, err := getOsdsForBucket(args[0]); err != nil {
+			if _, err := getOsdsForBucket(args[0], ""); err != nil {
 				return errors.Wrapf(err, "error validating '%s' as a bucket containing OSDs", args[0])
 			}
 
@@ -75,7 +75,9 @@ or is undesirable. The given CRUSH bucket must directly contain OSDs.
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			M = mustGetCurrentMappingState()
-			osds := mustGetOsdsForBucket(args[0])
+			deviceClass := mustGetString(cmd, "device-class")
+
+			osds := mustGetOsdsForBucket(args[0], deviceClass)
 
 			maxBackfills := mustGetInt(cmd, "max-backfills")
 			targetSpread := mustGetInt(cmd, "target-spread")
@@ -521,7 +523,7 @@ func parseOsdSpec(s string) ([]int, error) {
 		return errResponse(s)
 	}
 
-	osds, err := getOsdsForBucket(spl[1])
+	osds, err := getOsdsForBucket(spl[1], "")
 	if err != nil {
 		return nil, err
 	}
@@ -570,6 +572,8 @@ func init() {
 
 	balanceBucketCmd.Flags().Int("max-backfills", 5, "max number of backfills to schedule for this bucket, including pre-existing ones")
 	balanceBucketCmd.Flags().Int("target-spread", 1, "target difference between the fullest and emptiest OSD in the bucket")
+	balanceBucketCmd.Flags().String("device-class", "", "device class filter, balance only OSDs with this device class")
+
 	rootCmd.AddCommand(balanceBucketCmd)
 
 	cancelBackfillCmd.Flags().Bool("exclude-backfilling", false, "don't interrupt already-started backfills")

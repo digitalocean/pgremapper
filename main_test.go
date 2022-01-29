@@ -728,6 +728,45 @@ func TestParseMaxBackfillReservations(t *testing.T) {
 	require.Equal(t, 6, M.bs.getMaxBackfillReservations(133))
 }
 
+func TestDeviceClassFilter(t *testing.T) {
+	defer teardownTest(t)
+	osdTreeOut := `
+	{
+		"nodes": [
+		  { "id": -1, "name": "default", "type": "root", "children": [-4] },
+		  { "id": -4, "name": "datacenter1", "type": "datacenter", "children": [-3] },
+		  { "id": -3, "name": "rack1", "type": "rack", "children": [-31, -6, -5, -2] },
+		  { "id": -2, "name": "host1", "type": "host", "children": [2, 1, 0] },
+		  { "id": 0, "device_class": "green", "name": "osd.0", "type": "osd", "reweight": 1 },
+		  { "id": 1, "device_class": "red", "name": "osd.1", "type": "osd", "reweight": 1 },
+		  { "id": 2, "device_class": "blue", "name": "osd.2", "type": "osd", "reweight": 1 },
+		  { "id": -5, "name": "host2", "type": "host", "children": [6, 4, 3] },
+		  { "id": 3, "device_class": "green", "name": "osd.3", "type": "osd", "reweight": 1 },
+		  { "id": 4, "device_class": "red", "name": "osd.4", "type": "osd", "reweight": 1 },
+		  { "id": 6, "device_class": "blue", "name": "osd.6", "type": "osd", "reweight": 1 },
+		  { "id": -6, "name": "host3", "type": "host", "children": [8, 7, 5] },
+		  { "id": 5, "device_class": "green", "name": "osd.5", "type": "osd", "reweight": 1 },
+		  { "id": 7, "device_class": "red", "name": "osd.7", "type": "osd", "reweight": 1 },
+		  { "id": 8, "device_class": "blue", "name": "osd.8", "type": "osd", "reweight": 1 },
+		  { "id": -31, "name": "host4", "type": "host", "children": [11, 10, 9] },
+		  { "id": 9, "device_class": "green", "name": "osd.9", "type": "osd", "reweight": 1 },
+		  { "id": 10, "device_class": "red", "name": "osd.10", "type": "osd", "reweight": 1 },
+		  { "id": 11, "device_class": "blue", "name": "osd.11", "type": "osd", "reweight": 1 }
+	  ]
+	}
+`
+	runOsdTree = func() (string, error) { return osdTreeOut, nil }
+
+	require.ElementsMatch(t, mustGetOsdsForBucket("rack1", "red"),
+		[]int{1, 4, 7, 10})
+	require.ElementsMatch(t, mustGetOsdsForBucket("rack1", "blue"),
+		[]int{2, 6, 8, 11})
+	require.ElementsMatch(t, mustGetOsdsForBucket("host1", "green"),
+		[]int{0})
+	require.ElementsMatch(t, mustGetOsdsForBucket("host4", ""),
+		[]int{9, 10, 11})
+}
+
 func teardownTest(t *testing.T) {
 	savedOsdDumpOut = nil
 	savedParsedOsdTree = nil
