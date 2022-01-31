@@ -58,11 +58,12 @@ type osdDumpOut struct {
 }
 
 type osdTreeOutNode struct {
-	ID       int     `json:"id"`
-	Type     string  `json:"type"`
-	Name     string  `json:"name"`
-	Reweight float64 `json:"reweight"`
-	Children []int   `json:"children"`
+	ID          int     `json:"id"`
+	DeviceClass string  `json:"device_class"`
+	Name        string  `json:"name"`
+	Type        string  `json:"type"`
+	Reweight    float64 `json:"reweight"`
+	Children    []int   `json:"children"`
 }
 
 type osdTreeOut struct {
@@ -70,10 +71,11 @@ type osdTreeOut struct {
 }
 
 type osdTreeNode struct {
-	ID       int
-	Name     string
-	Type     string
-	Reweight float64
+	ID          int
+	DeviceClass string
+	Type        string
+	Name        string
+	Reweight    float64
 
 	Parent   *osdTreeNode
 	Children []*osdTreeNode
@@ -270,15 +272,16 @@ func (r mapping) String() string {
 	return fmt.Sprintf("%d->%d", r.From, r.To)
 }
 
-func mustGetOsdsForBucket(bucket string) []int {
-	osds, err := getOsdsForBucket(bucket)
+func mustGetOsdsForBucket(bucket string, deviceClass string) []int {
+	osds, err := getOsdsForBucket(bucket, deviceClass)
+
 	if err != nil {
 		panic(errors.WithStack(err))
 	}
 	return osds
 }
 
-func getOsdsForBucket(bucket string) ([]int, error) {
+func getOsdsForBucket(bucket string, deviceClass string) ([]int, error) {
 	tree := osdTree()
 
 	bucketNode, ok := tree.NameToNode[bucket]
@@ -289,13 +292,21 @@ func getOsdsForBucket(bucket string) ([]int, error) {
 	osds := []int{}
 	for _, c := range bucketNode.Children {
 		if c.Type != "osd" {
-			osds = append(osds, mustGetOsdsForBucket(c.Name)...)
+			osds = append(osds, mustGetOsdsForBucket(c.Name, deviceClass)...)
 			continue
 		}
 		if c.Reweight == 0 {
-			// This OSD is 'out' - exclude it.
+			// This OSD is 'out' - exclude it
 			continue
 		}
+		// Perform device_class check only of device_class is defined
+		if deviceClass != "" {
+			if c.DeviceClass != deviceClass {
+				// This OSD have another device_class - exclude it
+				continue
+			}
+		}
+
 		osds = append(osds, c.ID)
 	}
 	return osds, nil
@@ -493,10 +504,11 @@ func osdTree() *parsedOsdTree {
 	// First, build direct lookup mappings.
 	for _, n := range out.Nodes {
 		node := &osdTreeNode{
-			ID:       n.ID,
-			Name:     n.Name,
-			Type:     n.Type,
-			Reweight: n.Reweight,
+			ID:          n.ID,
+			DeviceClass: n.DeviceClass,
+			Name:        n.Name,
+			Type:        n.Type,
+			Reweight:    n.Reweight,
 		}
 		tree.IDToNode[n.ID] = node
 		tree.NameToNode[n.Name] = node

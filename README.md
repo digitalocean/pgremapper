@@ -78,6 +78,7 @@ $ ./pgremapper balance-bucket <bucket> [--max-backfills <n>] [--target-spread <n
 ```
 
 * `<bucket>`: A CRUSH bucket that directly contains OSDs.
+* `--device-class`: The device class filter, balance only OSDs with this device class.
 * `--max-backfills`: The total number of backfills that should be allowed to be scheduled that affect this CRUSH bucket. This takes pre-existing backfills into account.
 * `--target-spread`: The goal state in terms of the maximum difference in PG counts across OSDs in this bucket.
 
@@ -86,6 +87,11 @@ $ ./pgremapper balance-bucket <bucket> [--max-backfills <n>] [--target-spread <n
 Schedule 10 backfills on the host named `data11`, trying to achieve a maximum PG spread of 3 between the fullest and emptiest OSDs (in terms of PG counts) within that host:
 ```
 $ ./pgremapper balance-bucket data11 --max-backfills 10 --target-spread 3
+```
+
+Balance host named `data11`, use OSDs with `nvme` device class only:
+```
+$ ./pgremapper balance-bucket data11 --device-class nvme
 ```
 
 ### cancel-backfill
@@ -144,7 +150,7 @@ Remap PGs off of the given source OSD, up to the given maximum number of schedul
 $ ./pgremapper drain <source OSD> --target-osds <osdspec>[,<osdspec>] [--allow-movement-across <bucket type>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>]
 ```
 
-* `<source OSD>`: The OSD that will become the backfill source. 
+* `<source OSD>`: The OSD that will become the backfill source.
 * `--target-osds`: The OSD(s) that will become the backfill target(s).
 * `--allow-movement-across`: Constrain which type of data movements will be considered if target OSDs are given outside of the CRUSH bucket that contains the source OSD. For example, if your OSDs all live in a CRUSH bucket of type `host`, passing `host` here will allow remappings across hosts as long as the source and target host live within the same CRUSH bucket themselves. Target CRUSH buckets will be not be considered for a given PG if they already contain replicas/chunks of that PG. By default, if this option isn't given, data movements are allowed only within the direct CRUSH bucket containing the source OSD.
 * `--max-backfill-reservations`: Consume only the given reservation maximums for backfill. You'll commonly want to set this below your `osd-max-backfills` setting so that any scheduled recoveries may clear without waiting for a backfill to complete. A default value is specified first, and then per-`osdspec` values for cases where you want to allow more backfill or have non-uniform `osd-max-backfills` settings.
