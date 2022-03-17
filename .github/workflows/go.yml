@@ -34,5 +34,8 @@ jobs:
     - name: Build
       run: go build -v ./...
 
+    - name: Static code checks
+      uses: golangci/golangci-lint-action@v2
+
     - name: Test
       run: go test -v ./...
