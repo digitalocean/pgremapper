@@ -188,19 +188,6 @@ func (pgb *pgBriefItem) primaryOsd() int {
 	panic(fmt.Sprintf("%s: no valid OSDs found in acting set", pgb.PgID))
 }
 
-type cephStatus struct {
-	Health struct {
-		Checks struct {
-			OsdmapFlags struct {
-				Severity string `json:"severity"`
-				Summary  struct {
-					Message string `json:"message"`
-				} `json:"summary"`
-			} `json:"OSDMAP_FLAGS"`
-		} `json:"checks"`
-	} `json:"health"`
-}
-
 func (otn *osdTreeNode) getNearestParentOfType(t string) *osdTreeNode {
 	parent := otn.Parent
 	for parent != nil {
