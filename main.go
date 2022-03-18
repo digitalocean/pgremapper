@@ -610,20 +610,6 @@ func main() {
 	}
 }
 
-func getCephStatus() (*cephStatus, error) {
-	out, err := run("ceph", "status", "-f", "json")
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	status := cephStatus{}
-	if err := json.Unmarshal([]byte(out), &status); err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return &status, nil
-}
-
 func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, includedOsds, pgsIncludingOsds map[int]struct{}) {
 	pgBriefs := pgDumpPgsBrief()
 	puis := pgUpmapItemMap()
@@ -800,10 +786,7 @@ func isCandidateMapping(
 	if allowMovementAcrossCrushType == "" {
 		// Data movements must stay within the source's direct CRUSH
 		// bucket.
-		if targetOsdNode.Parent != sourceOsdNode.Parent {
-			return false
-		}
-		return true
+		return targetOsdNode.Parent == sourceOsdNode.Parent
 	}
 
 	// Data movements are allowed between buckets of type

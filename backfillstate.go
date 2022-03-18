@@ -37,8 +37,6 @@ type osdBackfillState struct {
 	// this occurs as well (e.g., what happens when there are multiple
 	// backfill targets?).
 	backfillsFrom int
-
-	maxBackfillsFrom int
 }
 
 type backfillState struct {
