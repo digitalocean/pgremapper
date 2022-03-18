@@ -36,6 +36,9 @@ jobs:
 
     - name: Static code checks
       uses: golangci/golangci-lint-action@v2
+      with:
+        version: v1.44.2
+        args: --enable=gofmt
 
     - name: Test
       run: go test -v ./...
