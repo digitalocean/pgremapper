@@ -116,6 +116,15 @@ type pgQueryOut struct {
 	} `json:"peer_info"`
 }
 
+// mappingsAsMap returns the To/From OSD mapping pairs of an upmap item as a map
+func (pui *pgUpmapItem) mappingsAsMap() map[int]int {
+	mappings := make(map[int]int)
+	for _, mp := range pui.Mappings {
+		mappings[mp.To] = mp.From
+	}
+	return mappings
+}
+
 func (pqo *pgQueryOut) getCompletePeers() []int {
 	// Start with the acting set, since we know those are complete. We'll
 	// then iterate the peers to find shards/replicas that are missing but
@@ -404,42 +413,40 @@ func pgBriefMap() map[string]*pgBriefItem {
 	return pgBriefMap
 }
 
+// Re-order the up list so that any OSDs in it that are also in the
+// acting list are in the same place. We also need to take into account
+// upmap items which create relationships between the up and acting
+// OSDs. This should never do anything for EC pools, where the order
+// matters and won't change, but for replicated pools the order can
+// change and this doesn't imply data movement.
 func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
-	if pui == nil {
-		pui = &pgUpmapItem{}
+	mappings := make(map[int]int)
+	if pui != nil {
+		mappings = pui.mappingsAsMap()
 	}
 
-	// Re-order the up list so that any OSDs in it that are also in the
-	// acting list are in the same place. We also need to take into account
-	// upmap items which create relationships between the up and acting
-	// OSDs. This should never do anything for EC pools, where the order
-	// matters and won't change, but for replicated pools the order can
-	// change and this doesn't imply data movement.
-	for ai, osd := range acting {
-		fromOsd := invalidOSD
-		for ui := range up {
+	swapUp := func(i1 int, i2 int) {
+		if i1 != i2 {
+			tmp := up[i1]
+			up[i1] = up[i2]
+			up[i2] = tmp
+		}
+	}
+
+	for ai, actOsd := range acting {
+		for ui, upOsd := range up {
+			if upOsd == actOsd {
+				swapUp(ui, ai)
+				break
+			}
 			// If this PG is in backfill, it could be because of an
 			// upmap item. Find any such matching mapping and
 			// consider its source OSD when matching against this
 			// acting OSD.
-			for _, mp := range pui.Mappings {
-				if mp.To == up[ui] {
-					fromOsd = mp.From
-				}
-			}
-			if up[ui] != osd && (fromOsd == invalidOSD || fromOsd != osd) {
-				continue
-			}
-			if ui == ai {
-				// Indexes match; no change required.
+			if from, ok := mappings[upOsd]; ok && from == actOsd {
+				swapUp(ui, ai)
 				break
 			}
-			// Swap whatever's at the acting set index with
-			// this OSD.
-			tmp := up[ui]
-			up[ui] = up[ai]
-			up[ai] = tmp
-			break
 		}
 	}
 }
