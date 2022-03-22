@@ -33,10 +33,12 @@ const (
 var (
 	runOsdDump        = func() (string, error) { return run("ceph", "osd", "dump", "-f", "json") }
 	runOsdTree        = func() (string, error) { return run("ceph", "osd", "tree", "-f", "json") }
+	runOsdPoolLs      = func() (string, error) { return run("ceph", "osd", "pool", "ls", "detail", "-f", "json") }
 	runPgDumpPgsBrief = func() (string, error) { return run("ceph", "pg", "dump", "pgs_brief", "-f", "json") }
 	runPgQuery        = func(pgid string) (string, error) { return run("ceph", "pg", pgid, "query", "-f", "json") }
 
 	pgQueryPeerRegexp = regexp.MustCompile(`(?P<osd>[0-9]+)(?:\((?P<index>[0-9]+)\))?`)
+	pgIdRegexp        = regexp.MustCompile(`(?P<pool>[0-9]+)\.(?P<id>[0-9a-f]+)`)
 )
 
 type pgUpmapItem struct {
@@ -79,6 +81,16 @@ type osdTreeNode struct {
 
 	Parent   *osdTreeNode
 	Children []*osdTreeNode
+}
+
+type osdPoolDetail struct {
+	ID        int    `json:"pool_id"`
+	Name      string `json:"pool_name"`
+	ECProfile string `json:"erasure_code_profile"`
+}
+
+type poolsDetails struct {
+	Pools map[int]*osdPoolDetail
 }
 
 type parsedOsdTree struct {
@@ -264,6 +276,22 @@ func (pui *pgUpmapItem) do() {
 	_ = runOrDie(cmd...)
 }
 
+// Detect whether a given PG belongs to an erasure-coded pool
+func (pd *poolsDetails) PgUsesEC(pgid string) bool {
+	m := pgIdRegexp.FindStringSubmatch(pgid)
+	if len(m) != 3 {
+		panic(fmt.Sprintf("can't parse PGID %s", pgid))
+	}
+	poolId, err := strconv.Atoi(m[1])
+	if err != nil {
+		panic(fmt.Sprintf("can't parse pool in PGID %s", pgid))
+	}
+	if pool, ok := pd.Pools[poolId]; ok {
+		return pool.ECProfile != "replicated_rule"
+	}
+	panic(fmt.Sprintf("could not find pool data for PG %s", pgid))
+}
+
 func (r mapping) String() string {
 	return fmt.Sprintf("%d->%d", r.From, r.To)
 }
@@ -350,9 +378,8 @@ func pgDumpPgsBrief() []*pgBriefItem {
 	}
 	pgBriefs = sanitizePgBriefs(pgBriefs)
 
-	puis := pgUpmapItemMap()
 	for _, pgb := range pgBriefs {
-		reorderUpToMatchActing(puis[pgb.PgID], pgb.Up, pgb.Acting)
+		reorderUpToMatchActing(pgb.PgID, pgb.Up, pgb.Acting, true)
 	}
 
 	savedPgDumpPgsBrief = pgBriefs
@@ -419,10 +446,19 @@ func pgBriefMap() map[string]*pgBriefItem {
 // OSDs. This should never do anything for EC pools, where the order
 // matters and won't change, but for replicated pools the order can
 // change and this doesn't imply data movement.
-func reorderUpToMatchActing(pui *pgUpmapItem, up, acting []int) {
+func reorderUpToMatchActing(pgid string, up, acting []int, useUpmap bool) {
+	// Do not reorder if the PG belongs to an Erasure-Coded pool,
+	// since order DOES matter and will trigger backfills.
+	pools := osdPoolDetails()
+	if pools.PgUsesEC(pgid) {
+		return
+	}
+
 	mappings := make(map[int]int)
-	if pui != nil {
-		mappings = pui.mappingsAsMap()
+	if useUpmap {
+		if pui, ok := pgUpmapItemMap()[pgid]; ok {
+			mappings = pui.mappingsAsMap()
+		}
 	}
 
 	swapUp := func(i1 int, i2 int) {
@@ -521,6 +557,29 @@ func osdTree() *parsedOsdTree {
 
 	savedParsedOsdTree = tree
 	return tree
+}
+
+var savedOsdPoolsDetails *poolsDetails
+
+// query and parse the full Ceph pool details
+func osdPoolDetails() *poolsDetails {
+	if savedOsdPoolsDetails != nil {
+		return savedOsdPoolsDetails
+	}
+
+	var pools []*osdPoolDetail
+	var poolsMap map[int]*osdPoolDetail
+
+	jsonOut, err := runOsdPoolLs()
+	mustParseCephCommand(jsonOut, err, &pools)
+
+	poolsMap = make(map[int]*osdPoolDetail)
+	for _, pool := range pools {
+		poolsMap[pool.ID] = pool
+	}
+
+	savedOsdPoolsDetails = &poolsDetails{Pools: poolsMap}
+	return savedOsdPoolsDetails
 }
 
 func pgQuery(pgid string) *pgQueryOut {
