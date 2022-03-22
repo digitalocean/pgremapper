@@ -128,8 +128,8 @@ type pgQueryOut struct {
 	} `json:"peer_info"`
 }
 
-// mappingsAsMap returns the To/From OSD mapping pairs of an upmap item as a map
-func (pui *pgUpmapItem) mappingsAsMap() map[int]int {
+// mappingsAsToFromMap returns the To/From OSD mapping pairs of an upmap item as a map
+func (pui *pgUpmapItem) mappingsAsToFromMap() map[int]int {
 	mappings := make(map[int]int)
 	for _, mp := range pui.Mappings {
 		mappings[mp.To] = mp.From
@@ -457,7 +457,7 @@ func reorderUpToMatchActing(pgid string, up, acting []int, useUpmap bool) {
 	mappings := make(map[int]int)
 	if useUpmap {
 		if pui, ok := pgUpmapItemMap()[pgid]; ok {
-			mappings = pui.mappingsAsMap()
+			mappings = pui.mappingsAsToFromMap()
 		}
 	}
 
