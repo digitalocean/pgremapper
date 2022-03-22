@@ -769,6 +769,7 @@ func TestDeviceClassFilter(t *testing.T) {
 
 func teardownTest(t *testing.T) {
 	savedOsdDumpOut = nil
+	savedOsdPoolsDetails = nil
 	savedParsedOsdTree = nil
 	savedPgDumpPgsBrief = nil
 }

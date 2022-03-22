@@ -90,10 +90,10 @@ func (bs *backfillState) accountForRemap(pgid string, from, to int) {
 	if !found {
 		panic(fmt.Sprintf("%s: osd %d not in up set", pgid, from))
 	}
-	// Pass nil for the pui here as we don't need to strictly re-order the
+	// Do not use the upmap here as we don't need to strictly re-order the
 	// up set; it's sufficient to consider which OSDs are listed in up and
 	// acting by themselves.
-	reorderUpToMatchActing(nil, pgb.Up, pgb.Acting)
+	reorderUpToMatchActing(pgid, pgb.Up, pgb.Acting, false)
 
 	bs.addReservations(pgb)
 }
