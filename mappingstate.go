@@ -99,7 +99,7 @@ func sanitizeStaleUpmaps(puis []*pgUpmapItem) {
 	}
 }
 
-func (m *mappingState) remap(pgid string, from, to int) {
+func (m *mappingState) tryRemap(pgid string, from, to int) error {
 	m.l.Lock()
 	defer m.l.Unlock()
 
@@ -107,11 +107,9 @@ func (m *mappingState) remap(pgid string, from, to int) {
 	for _, m := range pui.Mappings {
 		if m.From == from && m.To == to {
 			// Duplicate - ignore
-			return
+			return nil
 		}
 	}
-
-	m.bs.accountForRemap(pgid, from, to)
 
 	pui.dirty = true
 	m.changeState = ChangesPending
@@ -123,22 +121,33 @@ func (m *mappingState) remap(pgid string, from, to int) {
 			pui.Mappings[i].dirty = true
 			pui.removedMappings = append(pui.removedMappings, pui.Mappings[i])
 			pui.Mappings = append(pui.Mappings[0:i], pui.Mappings[i+1:]...)
-			return
+			m.bs.accountForRemap(pgid, from, to)
+			return nil
 		}
 		if mp.To == from {
 			// Modify this mapping to point to the new destination.
 			pui.Mappings[i].dirty = true
 			pui.removedMappings = append(pui.removedMappings, pui.Mappings[i])
 			pui.Mappings[i].To = to
-			return
+			m.bs.accountForRemap(pgid, from, to)
+			return nil
 		}
 		if mp.From == to || mp.From == from || mp.To == to {
-			panic(fmt.Sprintf("pg %s: conflicting mapping(s) found when trying to map from %d to %d", pgid, from, to))
+			return fmt.Errorf("pg %s: conflicting mapping %d->%d found when trying to map %d->%d", pgid, mp.From, mp.To, from, to)
 		}
 	}
 
 	// No existing mapping was found; add a new one.
 	pui.Mappings = append(pui.Mappings, mapping{From: from, To: to, dirty: true})
+	m.bs.accountForRemap(pgid, from, to)
+	return nil
+}
+
+func (m *mappingState) mustRemap(pgid string, from, to int) {
+	err := m.tryRemap(pgid, from, to)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (m *mappingState) findOrMakeUpmapItem(pgid string) *pgUpmapItem {

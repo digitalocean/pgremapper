@@ -270,7 +270,7 @@ thus safer and more convenient to use than 'ceph osd pg-upmap-items' directly.
 			sourceOsd, _ := strconv.Atoi(args[1])
 			targetOsd, _ := strconv.Atoi(args[2])
 
-			M.remap(pgID, sourceOsd, targetOsd)
+			M.mustRemap(pgID, sourceOsd, targetOsd)
 
 			if !confirmProceed() {
 				return
@@ -413,13 +413,13 @@ JSON format example, remapping PG 1.1 from OSD 100 to OSD 42:
 				found := false
 				for _, puiM := range pui.Mappings {
 					if puiM.From == m.Mapping.From {
-						M.remap(m.PgID, puiM.To, m.Mapping.To)
+						M.mustRemap(m.PgID, puiM.To, m.Mapping.To)
 						found = true
 						break
 					}
 				}
 				if !found {
-					M.remap(m.PgID, m.Mapping.From, m.Mapping.To)
+					M.mustRemap(m.PgID, m.Mapping.From, m.Mapping.To)
 				}
 			}
 
@@ -693,7 +693,28 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, include
 							continue
 						}
 
-						M.remap(id, up[i], acting[i])
+						// It is possible that our
+						// remap attempt will fail in
+						// complex cases where:
+						// * An upmap item already
+						//   exists for one of the
+						//   OSDs.
+						// * At least one of the OSDs
+						//   appears in both the up and
+						//   acting sets.
+						// This is a somewhat-common
+						// occurrence in EC systems
+						// after a CRUSH change has
+						// been made at the host, rack,
+						// etc. level, and in many of
+						// these cases we can't
+						// actually use the upmap
+						// exception table to cancel
+						// the backfill.
+						err := M.tryRemap(id, up[i], acting[i])
+						if err != nil {
+							fmt.Printf("WARNING: %v\n", err)
+						}
 					}
 				}
 			}
@@ -874,7 +895,7 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 		return "", false
 	}
 
-	M.remap(bestMapping.PgID, bestMapping.Mapping.From, bestMapping.Mapping.To)
+	M.mustRemap(bestMapping.PgID, bestMapping.Mapping.From, bestMapping.Mapping.To)
 
 	return bestMapping.PgID, true
 }
@@ -937,7 +958,7 @@ func calcPgMappingsToBalanceOsds(osds []int, maxBackfills, targetSpread int) {
 		}
 
 		pg := osdUpPGs[highestOsd][highestLen-1]
-		M.remap(pg.PgID, highestOsd, lowestOsd)
+		M.mustRemap(pg.PgID, highestOsd, lowestOsd)
 		osdUpPGs[lowestOsd] = append(osdUpPGs[lowestOsd], pg)
 		osdUpPGs[highestOsd] = osdUpPGs[highestOsd][:highestLen-1]
 		backfillsInSet++
