@@ -116,8 +116,8 @@ func (m *mappingState) remap(pgid string, from, to int) {
 	pui.dirty = true
 	m.changeState = ChangesPending
 
-	for i, m := range pui.Mappings {
-		if m.From == to && m.To == from {
+	for i, mp := range pui.Mappings {
+		if mp.From == to && mp.To == from {
 			// This mapping is the exact opposite of what we want -
 			// simply remove it.
 			pui.Mappings[i].dirty = true
@@ -125,14 +125,14 @@ func (m *mappingState) remap(pgid string, from, to int) {
 			pui.Mappings = append(pui.Mappings[0:i], pui.Mappings[i+1:]...)
 			return
 		}
-		if m.To == from {
+		if mp.To == from {
 			// Modify this mapping to point to the new destination.
 			pui.Mappings[i].dirty = true
 			pui.removedMappings = append(pui.removedMappings, pui.Mappings[i])
 			pui.Mappings[i].To = to
 			return
 		}
-		if m.From == to || m.From == from || m.To == to {
+		if mp.From == to || mp.From == from || mp.To == to {
 			panic(fmt.Sprintf("pg %s: conflicting mapping(s) found when trying to map from %d to %d", pgid, from, to))
 		}
 	}
