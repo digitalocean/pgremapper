@@ -170,7 +170,12 @@ func (pqo *pgQueryOut) getCompletePeers() []int {
 				continue
 			}
 			if peers[index] != invalidOSD {
-				panic(fmt.Sprintf("%s: multiple complete shards at index %d", pqo.Info.PgID, index))
+				// This almost certainly means that a backfill
+				// completed and the stale shard hasn't been
+				// cleaned up yet, but we haven't been able to
+				// observe a PG query from this case yet.
+				fmt.Printf("WARNING: PG %s has multiple complete shards at index %d - current acting or first queried chosen as upmap target", pqo.Info.PgID, index)
+				continue
 			}
 			peers[index] = osd
 		} else {
