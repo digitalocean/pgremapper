@@ -39,9 +39,9 @@ If you find a situation where `pgremapper` isn't working right, please file a re
 
 ## Building
 
-If you have a Go environment configured, you can use `go get`:
+If you have a Go environment configured, you can use `go install`:
 ```
-go get github.com/digitalocean/pgremapper
+go install github.com/digitalocean/pgremapper@latest
 ```
 
 Otherwise, clone this repository and use a golang Docker container to build:
