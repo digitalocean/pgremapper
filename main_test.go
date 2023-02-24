@@ -92,11 +92,12 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
   "acting": [ 33, 37, 2147483647 ],
   "info": { "pgid": "1.91" },
   "peer_info": [
-    { "peer": "37(1)", "incomplete": 0 },
-    { "peer": "36(1)", "incomplete": 1 },
-    { "peer": "33(0)", "incomplete": 0 },
-    { "peer": "30(2)", "incomplete": 1 },
-    { "peer": "38(2)", "incomplete": 0 }
+    { "peer": "37(1)", "incomplete": 0, "stats": {"last_epoch_clean": 101} },
+    { "peer": "36(1)", "incomplete": 1, "stats": {"last_epoch_clean": 100} },
+    { "peer": "33(0)", "incomplete": 0, "stats": {"last_epoch_clean": 100} },
+    { "peer": "30(2)", "incomplete": 1, "stats": {"last_epoch_clean": 100} },
+    { "peer": "38(2)", "incomplete": 0, "stats": {"last_epoch_clean": 101} },
+    { "peer": "39(2)", "incomplete": 0, "stats": {"last_epoch_clean": 99} }
   ]
 }
 		    `, nil
