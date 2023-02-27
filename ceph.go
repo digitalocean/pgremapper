@@ -125,6 +125,9 @@ type pgQueryOut struct {
 	PeerInfo []struct {
 		Peer       string `json:"peer"`
 		Incomplete int    `json:"incomplete"`
+		Stats      struct {
+			LastEpochClean int `json:"last_epoch_clean"`
+		} `json:"stats"`
 	} `json:"peer_info"`
 }
 
@@ -143,11 +146,10 @@ func (pqo *pgQueryOut) getCompletePeers() []int {
 	// complete, as these need recovery before they're considered acting
 	// again.
 	peers := pqo.Acting
+	osdEpochMap := make(map[int]int)
 
 	for _, pi := range pqo.PeerInfo {
-		if pi.Incomplete == 1 {
-			continue
-		}
+
 		// For EC pools, Peer takes the form 'osdid(index)'. For replicated
 		// pools, it's simply 'osdid'.
 		m := pgQueryPeerRegexp.FindStringSubmatch(pi.Peer)
@@ -166,20 +168,27 @@ func (pqo *pgQueryOut) getCompletePeers() []int {
 			if err != nil {
 				panic(fmt.Sprintf("%s: %s in peer ID %q is not a valid index", pqo.Info.PgID, m[2], pi.Peer))
 			}
+
+			// Save the last_epoch_clean for later comparison
+			osdEpochMap[osd] = pi.Stats.LastEpochClean
+
 			if peers[index] == osd {
 				continue
 			}
 			if peers[index] != invalidOSD {
-				// This almost certainly means that a backfill
-				// completed and the stale shard hasn't been
-				// cleaned up yet, but we haven't been able to
-				// observe a PG query from this case yet.
-				fmt.Printf("WARNING: PG %s has multiple complete shards at index %d - current acting or first queried chosen as upmap target", pqo.Info.PgID, index)
-				continue
+				// Choose the shard with the newest last_epoch_clean
+				if osdEpochMap[peers[index]] > pi.Stats.LastEpochClean {
+					continue
+				}
 			}
 			peers[index] = osd
 		} else {
-			// Replicated pool case. Order doesn't matter; if this
+			// For the replicated pool case we pick all of the complete peers
+			// as the method for determining which ones should be replaced.
+			if pi.Incomplete == 1 {
+				continue
+			}
+			// Order doesn't matter; if this
 			// OSD isn't already in the set, then put it at the
 			// first missing slot.
 			firstMissing := -1
