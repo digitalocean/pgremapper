@@ -32,7 +32,7 @@ func TestBackfillState(t *testing.T) {
 `
 	osdPoolDetailout := `
 [
- { "pool_id": 1, "pool_name": "replicated", "erasure_code_profile": "replicated_rule" }
+ { "pool_id": 1, "pool_name": "replicated", "erasure_code_profile": "" }
 ]
 `
 	runOsdDump = func() (string, error) { return "{}", nil }
