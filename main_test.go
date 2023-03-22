@@ -414,9 +414,9 @@ func TestCalcPgMappingsToBalanceHost(t *testing.T) {
 			maxBackfills: 4,
 			targetSpread: 0,
 			expected: []expectedMapping{
-				{ID: "1.14", Mappings: []mapping{{From: 3, To: 2, dirty: true}}},
+				{ID: "1.14", Mappings: []mapping{{From: 3, To: 4, dirty: true}}},
 				{ID: "1.5", Mappings: []mapping{{From: 2, To: 4, dirty: true}}},
-				{ID: "1.8", Mappings: []mapping{{From: 1, To: 4, dirty: true}}},
+				{ID: "1.8", Mappings: []mapping{{From: 1, To: 2, dirty: true}}},
 			},
 		},
 		{
