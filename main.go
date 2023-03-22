@@ -936,6 +936,7 @@ func calcPgMappingsToBalanceOsds(osds []int, maxBackfills, targetSpread int) {
 			lowestLen = len(osdUpPGs[osd])
 			highestOsd = osd
 			highestLen = len(osdUpPGs[osd])
+			break
 		}
 		for _, osd := range osds {
 			pgs, ok := osdUpPGs[osd]
