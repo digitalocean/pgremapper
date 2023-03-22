@@ -301,7 +301,7 @@ func (pd *poolsDetails) PgUsesEC(pgid string) bool {
 		panic(fmt.Sprintf("can't parse pool in PGID %s", pgid))
 	}
 	if pool, ok := pd.Pools[poolId]; ok {
-		return pool.ECProfile != "replicated_rule"
+		return pool.ECProfile != ""
 	}
 	panic(fmt.Sprintf("could not find pool data for PG %s", pgid))
 }
