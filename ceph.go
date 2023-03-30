@@ -15,10 +15,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -36,6 +38,7 @@ var (
 	runOsdPoolLs      = func() (string, error) { return run("ceph", "osd", "pool", "ls", "detail", "-f", "json") }
 	runPgDumpPgsBrief = func() (string, error) { return run("ceph", "pg", "dump", "pgs_brief", "-f", "json") }
 	runPgQuery        = func(pgid string) (string, error) { return run("ceph", "pg", pgid, "query", "-f", "json") }
+	runCrushCmp       = func(path string) (string, error) { return runCombined("crushdiff", "compare", path, "--verbose") }
 
 	pgQueryPeerRegexp = regexp.MustCompile(`(?P<osd>[0-9]+)(?:\((?P<index>[0-9]+)\))?`)
 	pgIdRegexp        = regexp.MustCompile(`(?P<pool>[0-9]+)\.(?P<id>[0-9a-f]+)`)
@@ -603,6 +606,136 @@ func pgQuery(pgid string) *pgQueryOut {
 	mustParseCephCommand(jsonOut, err, &out)
 
 	return &out
+}
+
+func crushCmp(fp string) ([]pgMapping, error) {
+	out, err := runCrushCmp(fp)
+	if err != nil {
+		panic(err)
+	}
+
+	puis, err := parseCrushDiff(out)
+	if err != nil {
+		panic(err)
+	}
+
+	mappings := make([]pgMapping, 0, len(puis))
+	for _, pui := range puis {
+		for _, m := range pui.Mappings {
+			if m.From == m.To {
+				continue
+			}
+
+			mappings = append(mappings, pgMapping{
+				PgID: pui.PgID,
+				Mapping: mapping{
+					From: m.From,
+					To:   m.To,
+				},
+			})
+		}
+	}
+
+	return mappings, nil
+}
+
+func parseCrushDiff(in string) ([]*pgUpmapItem, error) {
+	var (
+		sc     = bufio.NewScanner(strings.NewReader(in))
+		puiMap = make(map[string]*pgUpmapItem)
+	)
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+
+		// For PGs that are part of a 3x replicated pool, each
+		// line mapping should look something like follows:
+		//
+		//  1.0	[3, 7, 8] -> [3, 7, 2]
+		if !strings.Contains(line, "->") {
+			continue
+		}
+
+		pui, err := parsePGRemapEntry(line)
+		if err != nil {
+			return nil, errors.Wrap(err, "could not parse PG mapping entry")
+		}
+
+		puiMap[pui.PgID] = pui
+	}
+
+	if err := sc.Err(); err != nil {
+		return nil, errors.Wrap(err, "failed scanning crushmap")
+	}
+
+	puis := make([]*pgUpmapItem, 0, len(puiMap))
+	for _, pui := range puiMap {
+		puis = append(puis, pui)
+	}
+
+	sort.Slice(puis, func(i, j int) bool { return puis[i].PgID < puis[j].PgID })
+	return puis, nil
+}
+
+func parsePGRemapEntry(entry string) (*pgUpmapItem, error) {
+	parts := strings.Fields(entry)
+
+	// We expect at minimum the PG mapping entry should contain 4
+	// separate sections. For e.g.:
+	//
+	// 1.0 [3] -> [3]
+	if len(parts) < 4 {
+		return nil, fmt.Errorf("incomplete PG mapping entry: %q", entry)
+	}
+
+	// There should also be even number of elements in the remapping entry.
+	if len(parts)%2 != 0 {
+		return nil, fmt.Errorf("invalid PG mapping entry: %q", entry)
+	}
+
+	var (
+		pgID   = parts[0]
+		eM, nM = make([]int, 0, len(parts)/2), make([]int, 0, len(parts)/2)
+		nMM    bool
+	)
+	for _, part := range parts[1:] {
+		if part == "->" {
+			nMM = true
+			continue
+		}
+
+		part = strings.Trim(part, "[],")
+
+		id, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, errors.Wrapf(err, "could not parse pg mapping entry for %q", entry)
+		}
+
+		if nMM {
+			nM = append(nM, id)
+			continue
+		}
+
+		eM = append(eM, id)
+	}
+
+	// OSD sets should have the same length for both existing and new ones.
+	if len(eM) != len(nM) {
+		return nil, fmt.Errorf("unequal count between existing and new OSD sets within mapping: %q", entry)
+	}
+
+	enM := make([]mapping, 0, len(nM))
+	for i := range nM {
+		enM = append(enM, mapping{
+			From: eM[i],
+			To:   nM[i],
+		})
+	}
+
+	return &pgUpmapItem{
+		PgID:     pgID,
+		Mappings: enM,
+	}, nil
 }
 
 func mustParseCephCommand(out string, err error, v interface{}) {
