@@ -350,8 +350,8 @@ mapping), unless --whole-pg is specified.
 		},
 	}
 
-	exportCrushMappingsCommand = &cobra.Command{
-		Use:   "export-crush-change-mappings",
+	generateCrushMappingsCommand = &cobra.Command{
+		Use:   "generate-crush-change-mappings",
 		Short: "Export the mappings incurred from making a CRUSHmap change.",
 		Long: `Export the mappings incurred from making a CRUSHmap change.
 
@@ -645,9 +645,9 @@ func init() {
 	exportMappingsCommand.Flags().Bool("whole-pg", false, "export all mappings for any PGs that include the given OSD(s), not just the portions pertaining to those OSDs")
 	rootCmd.AddCommand(exportMappingsCommand)
 
-	exportCrushMappingsCommand.Flags().String("crushmap-text", "", "CRUSHmap, with changes, provided in the text format")
-	exportCrushMappingsCommand.Flags().String("output", "", "write output to the given file path instead of stdout")
-	rootCmd.AddCommand(exportCrushMappingsCommand)
+	generateCrushMappingsCommand.Flags().String("crushmap-text", "", "CRUSHmap, with changes, provided in the text format")
+	generateCrushMappingsCommand.Flags().String("output", "", "write output to the given file path instead of stdout")
+	rootCmd.AddCommand(generateCrushMappingsCommand)
 
 	rootCmd.AddCommand(importMappingsCommand)
 

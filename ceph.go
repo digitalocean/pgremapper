@@ -648,7 +648,7 @@ func parseCrushDiff(in string) ([]*pgUpmapItem, error) {
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 
-		// For PGs that are part of a 3x replicated pool, each
+		// For PGs that are part of, for instance, a 3x replicated pool, each
 		// line mapping should look something like follows:
 		//
 		//  1.0	[3, 7, 8] -> [3, 7, 2]
