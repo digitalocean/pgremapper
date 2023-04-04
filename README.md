@@ -184,6 +184,35 @@ $ ./pgremapper export-mappings <osdspec> ... [--output <file>] [--whole-pg]
 * `--output`: Write output to the given file path instead of `stdout`.
 * `--whole-pg`: Export all mappings for any PGs that include the given OSD(s), not just the portions pertaining to those OSDs.
 
+### generate-crush-change-mappings
+
+Generate upmaps in advance for a major (or minor) change to the CRUSHmap in a JSON format. The JSON output can then be reviewed and consumed by [`import-mappings`](#import-mappings) subcommand. The command can be run as:
+
+```
+$ ./pgremapper generate-crush-change-mappings --crushmap-text /tmp/crushmap.txt --output /tmp/upmap.json
+```
+
+The primary use-case is where we want to make a change to the CRUSHmap that could be backwards incompatible. For e.g. switching chooseleaf for a CRUSH rule from `osd` to `host` (or `host` to `rack`). Presently, making this change, and injecting a new CRUSHmap will in turn force rebalance PGs across hosts. Subcommands such as [`cancel-backfill`](#cancel-backfill) will not work in this case since the invariant that CRUSH attempts to conform to (spread copies between distinct hosts or racks) will take precedence. However, using this subcommand we can prepare for this event by simulating the new PG distribution and then issuing the upmap commands in anticipation of the new CRUSH change. The process might look like follows:
+
+```
+$ # Export the existing CRUSHmap in its text form.
+$ crushdiff export /tmp/crushmap.txt
+
+$ # Edit the CRUSHmap in your favorite editor to make any necessary changes.
+$ $EDITOR /tmp/crushmap.txt
+
+$ # Run the generate-crush-change-mappings subcommand to generate new mappings.
+$ ./pgremapper generate-crush-change-mappings --crushmap-text /tmp/crushmap.txt --output /tmp/upmap.json
+
+$ # Check that the upmap changes look desirable.
+$ ./pgremapper import-mappings /tmp/upmap.json --verbose
+
+$ # Apply the changes to the cluster. Proceed carefully here since this will actually issue `upmap` commands.
+$ ./pgremapper import-mappings /tmp/upmap.json --verbose --yes
+```
+
+Once the PG rebalancing completes (which might take on the order of minutes, hours or days, depending on the size of your cluster), we should be able to inject the new CRUSHmap into the existing OSDmap. Other than a small set of peering events, no new rebalancing or backfills should ideally occur. 
+
 ### import-mappings
 
 Import all upmaps from the given JSON input (probably from export-mappings) to the cluster. Input is `stdin` unless a file path is provided.

@@ -350,6 +350,52 @@ mapping), unless --whole-pg is specified.
 		},
 	}
 
+	generateCrushMappingsCommand = &cobra.Command{
+		Use:   "generate-crush-change-mappings",
+		Short: "Export the mappings incurred from making a CRUSHmap change.",
+		Long: `Export the mappings incurred from making a CRUSHmap change.
+
+Export all upmaps for a given CRUSHmap change in a json format usable by
+import-mappings. Useful for keeping the state of existing mappings to restore
+after destroying a number of OSDs, or any other CRUSH change that will cause
+upmap items to be cleaned up by the mons.
+
+A typical use-case could be changing a given CRUSH rule to switch chooseleaf
+from "osd" to "host", or from "host" to "rack". Once this new CRUSHmap is
+injected into the existing OSDMap, a large number of PGs will be subject to
+backfill -- that cannot be cancelled. Using this subcommand, we can pregenerate
+a list of upmap mappings, that we can gradually import, in order to move PGs
+such that they are already conform to the expected spread. Injecting a new
+CRUSHmap after this process completes, should largely be a no-op (unless the
+cluster undergoes some other major changes).
+`,
+		Run: func(cmd *cobra.Command, args []string) {
+			var writer io.Writer
+			cm := mustGetString(cmd, "crushmap-text")
+			output := mustGetString(cmd, "output")
+			if output == "" {
+				writer = os.Stdout
+			} else {
+				f, err := os.Create(output)
+				if err != nil {
+					panic(err)
+				}
+				defer f.Close()
+
+				writer = f
+			}
+
+			mappings, err := crushCmp(cm)
+			if err != nil {
+				panic(err)
+			}
+
+			if err := json.NewEncoder(writer).Encode(mappings); err != nil {
+				panic(err)
+			}
+		},
+	}
+
 	importMappingsCommand = &cobra.Command{
 		Use:   "import-mappings [<file>]",
 		Short: "Import and apply mappings.",
@@ -598,6 +644,11 @@ func init() {
 	exportMappingsCommand.Flags().String("output", "", "write output to the given file path instead of stdout")
 	exportMappingsCommand.Flags().Bool("whole-pg", false, "export all mappings for any PGs that include the given OSD(s), not just the portions pertaining to those OSDs")
 	rootCmd.AddCommand(exportMappingsCommand)
+
+	generateCrushMappingsCommand.Flags().String("crushmap-text", "", "CRUSHmap, with changes, provided in the text format")
+	generateCrushMappingsCommand.Flags().String("output", "", "write output to the given file path instead of stdout")
+	rootCmd.AddCommand(generateCrushMappingsCommand)
+
 	rootCmd.AddCommand(importMappingsCommand)
 
 	rootCmd.AddCommand(versionCmd)
@@ -1002,6 +1053,22 @@ func run(command ...string) (string, error) {
 	}
 
 	return string(stdout), nil
+}
+
+func runCombined(command ...string) (string, error) {
+	if verbose {
+		fmt.Fprintf(os.Stderr, "** executing: %s\n", strings.Join(command, " "))
+	}
+
+	cmd := exec.Command(command[0], command[1:]...)
+	out, err := cmd.CombinedOutput()
+
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to execute command: %q",
+			strings.Join(command, " "))
+	}
+
+	return string(out), nil
 }
 
 func runOrDie(command ...string) string {
