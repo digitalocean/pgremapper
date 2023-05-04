@@ -121,6 +121,8 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 
 	tests := []struct {
 		name         string
+		source       bool
+		target       bool
 		exclude      []int
 		include      []int
 		pgsIncluding []int
@@ -128,6 +130,8 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 	}{
 		{
 			name:    "with exclude specified",
+			source:  false,
+			target:  false,
 			exclude: []int{21, 26},
 			include: []int{},
 			expected: []expectedMapping{
@@ -144,7 +148,97 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 			},
 		},
 		{
+			name:    "with exclude, source, and target specified",
+			source:  true,
+			target:  true,
+			exclude: []int{21, 26},
+			include: []int{},
+			expected: []expectedMapping{
+				{ID: "1.33", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.46", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.47", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.8a", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8b", Mappings: []mapping{{From: 6, To: 7, dirty: true}, {From: 0, To: 1, dirty: true}}},
+				{ID: "1.8c", Mappings: []mapping{{From: 6, To: 10, dirty: true}, {From: 0, To: 1, dirty: true}}},
+				{ID: "1.8f", Mappings: []mapping{{From: 30, To: 31, dirty: true}}},
+				{ID: "1.90", Mappings: []mapping{}},
+				{ID: "1.91", Mappings: []mapping{{From: 36, To: 37, dirty: true}, {From: 30, To: 38, dirty: true}}},
+				{ID: "1.93", Mappings: []mapping{}},
+			},
+		},
+		{
+			name:    "with exclude and source specified",
+			source:  true,
+			target:  false,
+			exclude: []int{21, 26},
+			include: []int{},
+			expected: []expectedMapping{
+				{ID: "1.33", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.46", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.47", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.8a", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8b", Mappings: []mapping{{From: 6, To: 7, dirty: true}, {From: 0, To: 1, dirty: true}}},
+				{ID: "1.8c", Mappings: []mapping{{From: 6, To: 10, dirty: true}, {From: 0, To: 1, dirty: true}}},
+				{ID: "1.8e", Mappings: []mapping{{From: 20, To: 21, dirty: true}}},
+				{ID: "1.8f", Mappings: []mapping{{From: 30, To: 31, dirty: true}}},
+				{ID: "1.90", Mappings: []mapping{}},
+				{ID: "1.91", Mappings: []mapping{{From: 36, To: 37, dirty: true}, {From: 30, To: 38, dirty: true}}},
+				{ID: "1.93", Mappings: []mapping{}},
+			},
+		},
+		{
+			name:    "with exclude and target specified",
+			source:  false,
+			target:  true,
+			exclude: []int{21, 26},
+			include: []int{},
+			expected: []expectedMapping{
+				{ID: "1.33", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.46", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.47", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.8a", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8b", Mappings: []mapping{{From: 6, To: 7, dirty: true}, {From: 0, To: 1, dirty: true}}},
+				{ID: "1.8c", Mappings: []mapping{{From: 6, To: 10, dirty: true}, {From: 0, To: 1, dirty: true}}},
+				{ID: "1.8e", Mappings: []mapping{{From: 26, To: 27, dirty: true}}},
+				{ID: "1.8f", Mappings: []mapping{{From: 30, To: 31, dirty: true}}},
+				{ID: "1.90", Mappings: []mapping{}},
+				{ID: "1.91", Mappings: []mapping{{From: 36, To: 37, dirty: true}, {From: 30, To: 38, dirty: true}}},
+				{ID: "1.93", Mappings: []mapping{}},
+			},
+		},
+		{
 			name:    "with include specified",
+			source:  false,
+			target:  false,
+			exclude: []int{},
+			include: []int{0, 26},
+			expected: []expectedMapping{
+				{ID: "1.33", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.46", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.47", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
+				{ID: "1.8a", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8b", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8c", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8e", Mappings: []mapping{{From: 26, To: 27, dirty: true}}},
+			},
+		},
+		{
+			name:    "with include and target specified",
+			source:  false,
+			target:  true,
+			exclude: []int{},
+			include: []int{1, 26},
+			expected: []expectedMapping{
+				{ID: "1.46", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8a", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8b", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+				{ID: "1.8c", Mappings: []mapping{{From: 0, To: 1, dirty: true}}},
+			},
+		},
+		{
+			name:    "with include and source specified",
+			source:  true,
+			target:  false,
 			exclude: []int{},
 			include: []int{0, 26},
 			expected: []expectedMapping{
@@ -159,6 +253,8 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 		},
 		{
 			name:    "with exclude and include specified",
+			source:  false,
+			target:  false,
 			exclude: []int{2},
 			include: []int{0, 26},
 			expected: []expectedMapping{
@@ -183,6 +279,8 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 			defer teardownTest(t)
 			M = mustGetCurrentMappingState()
 
+			source := tt.source
+			target := tt.target
 			excludeOsds := make(map[int]struct{})
 			includeOsds := make(map[int]struct{})
 			pgsIncludingOsds := make(map[int]struct{})
@@ -199,7 +297,7 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 				pgsIncludingOsds[v] = struct{}{}
 			}
 
-			calcPgMappingsToUndoBackfill(true, excludeOsds, includeOsds, pgsIncludingOsds)
+			calcPgMappingsToUndoBackfill(true, source, target, excludeOsds, includeOsds, pgsIncludingOsds)
 
 			validateDirtyMappings(t, tt.expected)
 		})
