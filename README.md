@@ -108,6 +108,8 @@ $ ./pgremapper cancel-backfill [--exclude-backfilling] [--include-osds <osdspec>
 * `--include-osds`: Cancel backfills containing one of the given OSDs as a backfill source or target only.
 * `--exclude-osds`: The inverse of `--include-osds` - cancel backfills that do not contain one of the given OSDs as a backfill source or target.
 * `--pgs-including`: Cancel backfills for PGs that include the given OSDs in their up or acting set, whether or not the given OSDs are backfill sources or targets in those PGs.
+* `--source`: Used in conjunction with the above flags, selects only OSDs that are backfill sources.
+* `--target`: Selects only OSDs that are backfill targets
 
 #### Example - Cancel all backfill in the system as a part of an augment
 
