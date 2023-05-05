@@ -116,12 +116,22 @@ has been made so far.
 				panic(errors.WithStack(err))
 			}
 
+			source, err := cmd.Flags().GetBool("source")
+			if err != nil {
+				panic(errors.WithStack(err))
+			}
+
+			target, err := cmd.Flags().GetBool("target")
+			if err != nil {
+				panic(errors.WithStack(err))
+			}
+
 			excludedOsds := mustGetOsdSpecSliceMap(cmd, "exclude-osds")
 			includedOsds := mustGetOsdSpecSliceMap(cmd, "include-osds")
 			pgsIncludingOsds := mustGetOsdSpecSliceMap(cmd, "pgs-including")
 
 			M = mustGetCurrentMappingState()
-			calcPgMappingsToUndoBackfill(excludeBackfilling, excludedOsds, includedOsds, pgsIncludingOsds)
+			calcPgMappingsToUndoBackfill(excludeBackfilling, source, target, excludedOsds, includedOsds, pgsIncludingOsds)
 			if !confirmProceed() {
 				return
 			}
@@ -623,6 +633,8 @@ func init() {
 	rootCmd.AddCommand(balanceBucketCmd)
 
 	cancelBackfillCmd.Flags().Bool("exclude-backfilling", false, "don't interrupt already-started backfills")
+	cancelBackfillCmd.Flags().Bool("source", false, "selects only osds that are backfill sources")
+	cancelBackfillCmd.Flags().Bool("target", false, "selects only osds that are backfill targets")
 	cancelBackfillCmd.Flags().StringSlice("exclude-osds", []string{}, "list of osdspecs that are backfill sources or targets which will be excluded from backfill cancellation")
 	cancelBackfillCmd.Flags().StringSlice("include-osds", []string{}, "list of osdspecs that are backfill sources or targets which will be included in backfill cancellation")
 	cancelBackfillCmd.Flags().StringSlice("pgs-including", []string{}, "only PGs that include the given OSDs in their up or acting set will have their backfill canceled, whether or not the given OSDs are backfill sources or targets in those PGs")
@@ -661,7 +673,7 @@ func main() {
 	}
 }
 
-func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, includedOsds, pgsIncludingOsds map[int]struct{}) {
+func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, excludedOsds, includedOsds, pgsIncludingOsds map[int]struct{}) {
 	pgBriefs := pgDumpPgsBrief()
 
 	excluded := func(osd int) bool {
@@ -733,15 +745,27 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling bool, excludedOsds, include
 							continue
 						}
 
-						if excluded(up[i]) || excluded(acting[i]) {
-							continue
-						}
+						if target == source {
+							// We'll allow this OSD to be
+							// acted on if this PG is the
+							// source _or_ target
+							if excluded(up[i]) || excluded(acting[i]) {
+								continue
+							}
 
-						// We'll allow this OSD to be
-						// acted on if this PG is the
-						// source _or_ target
-						if !(included(up[i]) || included(acting[i])) {
-							continue
+							if !(included(up[i]) || included(acting[i])) {
+								continue
+							}
+						} else {
+							// If source/target flag is set we will act
+							// if the PG is in the source/target
+							if source && excluded(up[i]) || target && excluded(acting[i]) {
+								continue
+							}
+
+							if !(source && included(up[i]) || target && included(acting[i])) {
+								continue
+							}
 						}
 
 						// It is possible that our
