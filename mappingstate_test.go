@@ -21,6 +21,7 @@ import (
 )
 
 func TestGetMappings(t *testing.T) {
+	setupTest(t)
 	defer teardownTest(t)
 	pgDumpOut := `
 [
