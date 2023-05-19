@@ -128,10 +128,12 @@ has been made so far.
 
 			excludedOsds := mustGetOsdSpecSliceMap(cmd, "exclude-osds")
 			includedOsds := mustGetOsdSpecSliceMap(cmd, "include-osds")
+			excludedPools := mustGetPoolSpecSliceMap(cmd, "exclude-pools")
+			includedPools := mustGetPoolSpecSliceMap(cmd, "include-pools")
 			pgsIncludingOsds := mustGetOsdSpecSliceMap(cmd, "pgs-including")
 
 			M = mustGetCurrentMappingState()
-			calcPgMappingsToUndoBackfill(excludeBackfilling, source, target, excludedOsds, includedOsds, pgsIncludingOsds)
+			calcPgMappingsToUndoBackfill(excludeBackfilling, source, target, excludedOsds, includedOsds, excludedPools, includedPools, pgsIncludingOsds)
 			if !confirmProceed() {
 				return
 			}
@@ -587,6 +589,46 @@ func parseOsdSpec(s string) ([]int, error) {
 	return osds, nil
 }
 
+func mustGetPoolSpecSlice(cmd *cobra.Command, arg string) []int {
+	var pools []int
+	for _, s := range mustGetStringSlice(cmd, arg) {
+		pools = append(pools, mustParsePoolSpec(s)...)
+	}
+	return pools
+}
+
+func mustGetPoolSpecSliceMap(cmd *cobra.Command, arg string) map[int]struct{} {
+	pools := make(map[int]struct{})
+	for _, pool := range mustGetPoolSpecSlice(cmd, arg) {
+		pools[pool] = struct{}{}
+	}
+	return pools
+}
+
+func mustParsePoolSpec(s string) []int {
+	pools, err := parsePoolSpec(s)
+	if err != nil {
+		panic(errors.WithStack(err))
+	}
+	return pools
+}
+
+func parsePoolSpec(s string) ([]int, error) {
+	pool, err := strconv.Atoi(s)
+	if err == nil {
+		return []int{pool}, nil
+	}
+
+	details := osdPoolDetails()
+	for id, detail := range details.Pools {
+		if detail.Name == s {
+			return []int{id}, nil
+		}
+	}
+
+	return nil, errors.Errorf("'%s' is not a valid pool name or ID", s)
+}
+
 func mustParseMaxSourceBackfills(cmd *cobra.Command) {
 	max := mustGetInt(cmd, "max-source-backfills")
 	M.bs.maxBackfillsFrom = max
@@ -637,6 +679,8 @@ func init() {
 	cancelBackfillCmd.Flags().Bool("target", false, "selects only osds that are backfill targets")
 	cancelBackfillCmd.Flags().StringSlice("exclude-osds", []string{}, "list of osdspecs that are backfill sources or targets which will be excluded from backfill cancellation")
 	cancelBackfillCmd.Flags().StringSlice("include-osds", []string{}, "list of osdspecs that are backfill sources or targets which will be included in backfill cancellation")
+	cancelBackfillCmd.Flags().StringSlice("exclude-pools", []string{}, "list of pool names or IDs that will be excluded from backfill cancellation")
+	cancelBackfillCmd.Flags().StringSlice("include-pools", []string{}, "list of pool names or IDs that will be included in backfill cancellation")
 	cancelBackfillCmd.Flags().StringSlice("pgs-including", []string{}, "only PGs that include the given OSDs in their up or acting set will have their backfill canceled, whether or not the given OSDs are backfill sources or targets in those PGs")
 	rootCmd.AddCommand(cancelBackfillCmd)
 
@@ -673,7 +717,7 @@ func main() {
 	}
 }
 
-func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, excludedOsds, includedOsds, pgsIncludingOsds map[int]struct{}) {
+func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, excludedOsds, includedOsds, excludedPools, includedPools, pgsIncludingOsds map[int]struct{}) {
 	pgBriefs := pgDumpPgsBrief()
 
 	excluded := func(osd int) bool {
@@ -700,6 +744,19 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 				id := pgb.PgID
 				up := pgb.Up
 				acting := pgb.Acting
+				pool, err := strconv.Atoi(strings.Split(id, ".")[0])
+				if err != nil {
+					fmt.Printf("Could not parse pool ID from PG %s: %s\n", id, err)
+					continue
+				}
+
+				if _, ok := excludedPools[pool]; ok {
+					continue
+				}
+
+				if _, ok := includedPools[pool]; len(includedPools) > 0 && !ok {
+					continue
+				}
 
 				if !strings.Contains(pgb.State, "backfill") {
 					continue
