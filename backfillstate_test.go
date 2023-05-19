@@ -21,6 +21,7 @@ import (
 )
 
 func TestBackfillState(t *testing.T) {
+	setupTest(t)
 	defer teardownTest(t)
 	pgDumpOut := `
 [
@@ -30,13 +31,7 @@ func TestBackfillState(t *testing.T) {
  { "pgid": "1.04", "up": [ 8, 5, 6 ],  "acting": [ 77, 5, 7 ] }
 ]
 `
-	osdPoolDetailout := `
-[
- { "pool_id": 1, "pool_name": "replicated", "erasure_code_profile": "" }
-]
-`
 	runOsdDump = func() (string, error) { return "{}", nil }
-	runOsdPoolLs = func() (string, error) { return osdPoolDetailout, nil }
 	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
 
 	bs := mustGetCurrentBackfillState()
