@@ -143,7 +143,7 @@ has been made so far.
 	}
 
 	drainCmd = &cobra.Command{
-		Use:   "drain <source osd ID>",
+		Use:   "drain <source osdspec>",
 		Short: "Drain PGs from the given OSD to the target OSDs.",
 		Long: `Drain PGs from the given OSD to the target OSDs.
 
@@ -156,38 +156,46 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 				return errors.New("a source OSD must be specified")
 			}
 
-			if _, err := strconv.Atoi(args[0]); err != nil {
-				return err
-			}
-
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			M = mustGetCurrentMappingState()
 
-			sourceOsd, _ := strconv.Atoi(args[0])
+			var sourceOsds []int
+			for _, s := range args {
+				osdSpecOsds := mustParseOsdSpec(s)
+				sourceOsds = append(sourceOsds, osdSpecOsds...)
+			}
 			allowMovementAcrossCrushType := mustGetString(cmd, "allow-movement-across")
 			mustParseMaxBackfillReservations(cmd)
 			mustParseMaxSourceBackfills(cmd)
-			targetOsds := mustGetOsdSpecSlice(cmd, "target-osds")
 
+			targetOsds := mustGetOsdSpecSliceMap(cmd, "target-osds")
+			targetOsdSlice := make([]int, 0, len(targetOsds))
 			tree := osdTree()
-			sourceOsdNode, ok := tree.IDToNode[sourceOsd]
-			if !ok || sourceOsdNode.Type != "osd" {
-				panic(fmt.Errorf("source OSD %d doesn't exist", sourceOsd))
-			}
 
-			for _, targetOsd := range targetOsds {
+			for targetOsd, _ := range targetOsds {
 				targetOsdNode, ok := tree.IDToNode[targetOsd]
+				targetOsdSlice = append(targetOsdSlice, targetOsd)
 				if !ok || targetOsdNode.Type != "osd" {
 					panic(fmt.Errorf("target OSD %d doesn't exist", targetOsd))
 				}
 			}
 
+			for _, osd := range sourceOsds {
+				sourceOsdNode, ok := tree.IDToNode[osd]
+				if !ok || sourceOsdNode.Type != "osd" {
+					panic(fmt.Errorf("source OSD %d doesn't exist", osd))
+				}
+				if _, ok := targetOsds[osd]; ok {
+					panic(fmt.Errorf("osd %d was found in both the target and source lists", osd))
+				}
+			}
+
 			calcPgMappingsToDrainOsd(
 				allowMovementAcrossCrushType,
-				sourceOsd,
-				targetOsds,
+				sourceOsds,
+				targetOsdSlice,
 			)
 			if !confirmProceed() {
 				return
@@ -865,30 +873,26 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 
 func calcPgMappingsToDrainOsd(
 	allowMovementAcrossCrushType string,
-	sourceOsd int,
+	sourceOsds []int,
 	targetOsds []int,
 ) {
-	candidateMappings := getCandidateMappings(
-		allowMovementAcrossCrushType,
-		sourceOsd,
-		targetOsds,
-	)
+	changed := true
+	for changed {
+		changed = false
+		for _, sourceOsd := range sourceOsds {
+			candidateMappings := getCandidateMappings(
+				allowMovementAcrossCrushType,
+				sourceOsd,
+				targetOsds,
+			)
 
-	for len(candidateMappings) > 0 {
-		pgid, ok := remapLeastBusyPg(candidateMappings)
-		if !ok {
-			break
-		}
-
-		// Since this PG has now been remapped, remove it from the candidates.
-		newCandidates := []pgMapping{}
-		for _, m := range candidateMappings {
-			if m.PgID == pgid {
-				continue
+			if len(candidateMappings) > 0 {
+				_, ok := remapLeastBusyPg(candidateMappings)
+				if ok {
+					changed = true
+				}
 			}
-			newCandidates = append(newCandidates, m)
 		}
-		candidateMappings = newCandidates
 	}
 }
 
