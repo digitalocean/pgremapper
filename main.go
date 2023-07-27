@@ -171,12 +171,10 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 			mustParseMaxSourceBackfills(cmd)
 
 			targetOsds := mustGetOsdSpecSliceMap(cmd, "target-osds")
-			targetOsdSlice := make([]int, 0, len(targetOsds))
 			tree := osdTree()
 
 			for targetOsd, _ := range targetOsds {
 				targetOsdNode, ok := tree.IDToNode[targetOsd]
-				targetOsdSlice = append(targetOsdSlice, targetOsd)
 				if !ok || targetOsdNode.Type != "osd" {
 					panic(fmt.Errorf("target OSD %d doesn't exist", targetOsd))
 				}
@@ -187,15 +185,13 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 				if !ok || sourceOsdNode.Type != "osd" {
 					panic(fmt.Errorf("source OSD %d doesn't exist", osd))
 				}
-				if _, ok := targetOsds[osd]; ok {
-					panic(fmt.Errorf("osd %d was found in both the target and source lists", osd))
-				}
+				delete(targetOsds, osd)
 			}
 
 			calcPgMappingsToDrainOsd(
 				allowMovementAcrossCrushType,
 				sourceOsds,
-				targetOsdSlice,
+				targetOsds,
 			)
 			if !confirmProceed() {
 				return
@@ -874,7 +870,7 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 func calcPgMappingsToDrainOsd(
 	allowMovementAcrossCrushType string,
 	sourceOsds []int,
-	targetOsds []int,
+	targetOsds map[int]struct{},
 ) {
 	changed := true
 	for changed {
@@ -899,12 +895,12 @@ func calcPgMappingsToDrainOsd(
 func getCandidateMappings(
 	allowMovementAcrossCrushType string,
 	sourceOsd int,
-	targetOsds []int,
+	targetOsds map[int]struct{},
 ) []pgMapping {
 	pgs := getUpPGsForOsds([]int{sourceOsd})
 	candidateMappings := []pgMapping{}
 	for _, pg := range pgs[sourceOsd] {
-		for _, targetOsd := range targetOsds {
+		for targetOsd := range targetOsds {
 			if !isCandidateMapping(
 				allowMovementAcrossCrushType,
 				sourceOsd,
