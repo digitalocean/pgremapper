@@ -173,7 +173,7 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 			targetOsds := mustGetOsdSpecSliceMap(cmd, "target-osds")
 			tree := osdTree()
 
-			for targetOsd, _ := range targetOsds {
+			for targetOsd := range targetOsds {
 				targetOsdNode, ok := tree.IDToNode[targetOsd]
 				if !ok || targetOsdNode.Type != "osd" {
 					panic(fmt.Errorf("target OSD %d doesn't exist", targetOsd))
