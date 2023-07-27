@@ -152,7 +152,7 @@ scheduled backfills. No attempt is made to balance the fullness of the target
 OSDs; rather, the least busy target OSDs and PGs will be selected.
 `,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 1 {
+			if len(args) == 0 {
 				return errors.New("a source OSD must be specified")
 			}
 
