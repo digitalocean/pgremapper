@@ -143,7 +143,7 @@ has been made so far.
 	}
 
 	drainCmd = &cobra.Command{
-		Use:   "drain <source osdspec>",
+		Use:   "drain [<osdspec> ...]",
 		Short: "Drain PGs from one or more source OSDs to the target OSDs.",
 		Long: `Drain PGs from one or more source OSDs to the target OSDs.
 
@@ -208,7 +208,7 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 	}
 
 	undoUpmapsCmd = &cobra.Command{
-		Use:   "undo-upmaps [osd IDs...]",
+		Use:   "undo-upmaps <osdspec> [<osdspec> ...]",
 		Short: "Undo upmap entries for the given source/target OSDs",
 		Long: `Undo upmap entries for the given source/target OSDs.
 

@@ -150,7 +150,7 @@ Remap PGs off of the given source OSD spec(s), up to the given maximum number of
 If a source OSD is included among target OSDs, it will be removed from the targets.
 
 ```
-$ ./pgremapper drain <osdspec>[,<osdspec>] --target-osds <osdspec>[,<osdspec>] [--allow-movement-across <bucket type>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>]
+$ ./pgremapper drain <osdspec> [<osdspec> ...] --target-osds <osdspec>[,<osdspec>] [--allow-movement-across <bucket type>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>]
 ```
 
 * `<source OSD>`: The OSD that will become the backfill source.
@@ -254,7 +254,7 @@ Given a list of OSDs, remove (or modify) upmap items such that the OSDs become t
 This is useful for cases where the upmap rebalancer won't do this for us, e.g., performing a swap-bucket where we want the source OSDs to totally drain (vs. balance with the rest of the cluster). It also achieves a much higher level of concurrency than the balancer generally will.
 
 ```
-$ ./pgremapper undo-upmaps <osdspec>[,<osdspec>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>] [--target]
+$ ./pgremapper undo-upmaps <osdspec> [<osdspec> ...] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>] [--target]
 ```
 
 * `--max-backfill-reservations`: Consume only the given reservation maximums for backfill. You'll commonly want to set this below your `osd-max-backfills` setting so that any scheduled recoveries may clear without waiting for a backfill to complete. A default value is specified first, and then per-`osdspec` values for cases where you want to allow more backfill or have non-uniform `osd-max-backfills` settings.
