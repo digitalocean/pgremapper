@@ -180,10 +180,10 @@ Export all upmaps for the given OSD spec(s) in a json format usable by import-ma
 Note that the mappings exported will be just the portions of the upmap items pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the mapping), unless `--whole-pg` is specified.
 
 ```
-$ ./pgremapper export-mappings <osdspec> ... [--output <file>] [--whole-pg]
+$ ./pgremapper export-mappings <osdspec> [<osdspec> ...] [--output <file>] [--whole-pg]
 ```
 
-* `<osdspec> ...`: The OSDs for which mappings will be exported.
+* `<osdspec> ...`: The OSDs (or OSD specs) for which mappings will be exported.
 * `--output`: Write output to the given file path instead of `stdout`.
 * `--whole-pg`: Export all mappings for any PGs that include the given OSD(s), not just the portions pertaining to those OSDs.
 

@@ -143,7 +143,7 @@ has been made so far.
 	}
 
 	drainCmd = &cobra.Command{
-		Use:   "drain [<osdspec> ...]",
+		Use:   "drain <osdspec> [<osdspec> ...]",
 		Short: "Drain PGs from one or more source OSDs to the target OSDs.",
 		Long: `Drain PGs from one or more source OSDs to the target OSDs.
 
@@ -153,7 +153,7 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 `,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return errors.New("a source OSD must be specified")
+				return errors.New("one or more source OSDs must be specified")
 			}
 
 			for _, arg := range args {
