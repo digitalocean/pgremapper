@@ -144,8 +144,8 @@ has been made so far.
 
 	drainCmd = &cobra.Command{
 		Use:   "drain <source osdspec>",
-		Short: "Drain PGs from the given OSD to the target OSDs.",
-		Long: `Drain PGs from the given OSD to the target OSDs.
+		Short: "Drain PGs from one or more source OSDs to the target OSDs.",
+		Long: `Drain PGs from one or more source OSDs to the target OSDs.
 
 Remap PGs off of the given source OSD, up to the given maximum number of
 scheduled backfills. No attempt is made to balance the fullness of the target
@@ -154,6 +154,12 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				return errors.New("a source OSD must be specified")
+			}
+
+			for _, arg := range args {
+				if _, err := parseOsdSpec(arg); err != nil {
+					return err
+				}
 			}
 
 			return nil
@@ -879,7 +885,7 @@ func calcPgMappingsToDrainOsd(
 			candidateMappings := getCandidateMappings(
 				allowMovementAcrossCrushType,
 				sourceOsd,
-				targetOsds,
+				mapKeysInt(targetOsds),
 			)
 
 			if len(candidateMappings) > 0 {
@@ -895,12 +901,12 @@ func calcPgMappingsToDrainOsd(
 func getCandidateMappings(
 	allowMovementAcrossCrushType string,
 	sourceOsd int,
-	targetOsds map[int]struct{},
+	targetOsds []int,
 ) []pgMapping {
 	pgs := getUpPGsForOsds([]int{sourceOsd})
 	candidateMappings := []pgMapping{}
 	for _, pg := range pgs[sourceOsd] {
-		for targetOsd := range targetOsds {
+		for _, targetOsd := range targetOsds {
 			if !isCandidateMapping(
 				allowMovementAcrossCrushType,
 				sourceOsd,
@@ -1180,4 +1186,14 @@ func confirmProceed() bool {
 	fmt.Println("No changes made - use --yes to apply changes.")
 
 	return false
+}
+
+// mapKeysInt converts a map[int]struct{} into a sorted int slice
+func mapKeysInt(mm map[int]struct{}) []int {
+	ret := make([]int, 0, len(mm))
+	for k := range mm {
+		ret = append(ret, k)
+	}
+	sort.Ints(ret)
+	return ret
 }

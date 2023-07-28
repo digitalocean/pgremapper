@@ -146,10 +146,11 @@ $ ./pgremapper cancel-backfill --pgs-including bucket:data10
 
 ### drain
 
-Remap PGs off of the given source OSD, up to the given maximum number of scheduled backfills. No attempt is made to balance the fullness of the target OSDs; rather, the least busy target OSDs and PGs will be selected.
+Remap PGs off of the given source OSD spec(s), up to the given maximum number of scheduled backfills. No attempt is made to balance the fullness of the target OSDs; rather, the least busy target OSDs and PGs will be selected.
+If a source OSD is included among target OSDs, it will be removed from the targets.
 
 ```
-$ ./pgremapper drain <source OSD> --target-osds <osdspec>[,<osdspec>] [--allow-movement-across <bucket type>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>]
+$ ./pgremapper drain <osdspec>[,<osdspec>] --target-osds <osdspec>[,<osdspec>] [--allow-movement-across <bucket type>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>]
 ```
 
 * `<source OSD>`: The OSD that will become the backfill source.
