@@ -835,13 +835,21 @@ func TestCalcPgMappingsToDrainOsd(t *testing.T) {
 			M.bs.maxBackfillsFrom = maxSourceBackfills
 			calcPgMappingsToDrainOsd(
 				tt.allowMovementAcrossCrushType,
-				sourceOsd,
-				tt.targetOsds,
+				[]int{sourceOsd},
+				sliceToMap(tt.targetOsds),
 			)
 
 			validateDirtyMappings(t, tt.expected)
 		})
 	}
+}
+
+func sliceToMap(slice []int) map[int]struct{} {
+	ret := make(map[int]struct{}, len(slice))
+	for _, item := range slice {
+		ret[item] = struct{}{}
+	}
+	return ret
 }
 
 type expectedMapping struct {

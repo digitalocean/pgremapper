@@ -146,10 +146,11 @@ $ ./pgremapper cancel-backfill --pgs-including bucket:data10
 
 ### drain
 
-Remap PGs off of the given source OSD, up to the given maximum number of scheduled backfills. No attempt is made to balance the fullness of the target OSDs; rather, the least busy target OSDs and PGs will be selected.
+Remap PGs off of the given source OSD spec(s), up to the given maximum number of scheduled backfills. No attempt is made to balance the fullness of the target OSDs; rather, the least busy target OSDs and PGs will be selected.
+If a source OSD is included among target OSDs, it will be removed from the targets.
 
 ```
-$ ./pgremapper drain <source OSD> --target-osds <osdspec>[,<osdspec>] [--allow-movement-across <bucket type>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>]
+$ ./pgremapper drain <osdspec> [<osdspec> ...] --target-osds <osdspec>[,<osdspec>] [--allow-movement-across <bucket type>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>]
 ```
 
 * `<source OSD>`: The OSD that will become the backfill source.
@@ -179,10 +180,10 @@ Export all upmaps for the given OSD spec(s) in a json format usable by import-ma
 Note that the mappings exported will be just the portions of the upmap items pertaining to the selected OSDs (i.e. if a given OSD is the From or To of the mapping), unless `--whole-pg` is specified.
 
 ```
-$ ./pgremapper export-mappings <osdspec> ... [--output <file>] [--whole-pg]
+$ ./pgremapper export-mappings <osdspec> [<osdspec> ...] [--output <file>] [--whole-pg]
 ```
 
-* `<osdspec> ...`: The OSDs for which mappings will be exported.
+* `<osdspec> ...`: The OSDs (or OSD specs) for which mappings will be exported.
 * `--output`: Write output to the given file path instead of `stdout`.
 * `--whole-pg`: Export all mappings for any PGs that include the given OSD(s), not just the portions pertaining to those OSDs.
 
@@ -253,7 +254,7 @@ Given a list of OSDs, remove (or modify) upmap items such that the OSDs become t
 This is useful for cases where the upmap rebalancer won't do this for us, e.g., performing a swap-bucket where we want the source OSDs to totally drain (vs. balance with the rest of the cluster). It also achieves a much higher level of concurrency than the balancer generally will.
 
 ```
-$ ./pgremapper undo-upmaps <osdspec>[,<osdspec>] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>] [--target]
+$ ./pgremapper undo-upmaps <osdspec> [<osdspec> ...] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>] [--target]
 ```
 
 * `--max-backfill-reservations`: Consume only the given reservation maximums for backfill. You'll commonly want to set this below your `osd-max-backfills` setting so that any scheduled recoveries may clear without waiting for a backfill to complete. A default value is specified first, and then per-`osdspec` values for cases where you want to allow more backfill or have non-uniform `osd-max-backfills` settings.

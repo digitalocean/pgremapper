@@ -143,21 +143,23 @@ has been made so far.
 	}
 
 	drainCmd = &cobra.Command{
-		Use:   "drain <source osd ID>",
-		Short: "Drain PGs from the given OSD to the target OSDs.",
-		Long: `Drain PGs from the given OSD to the target OSDs.
+		Use:   "drain <osdspec> [<osdspec> ...]",
+		Short: "Drain PGs from one or more source OSDs to the target OSDs.",
+		Long: `Drain PGs from one or more source OSDs to the target OSDs.
 
 Remap PGs off of the given source OSD, up to the given maximum number of
 scheduled backfills. No attempt is made to balance the fullness of the target
 OSDs; rather, the least busy target OSDs and PGs will be selected.
 `,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 1 {
-				return errors.New("a source OSD must be specified")
+			if len(args) == 0 {
+				return errors.New("one or more source OSDs must be specified")
 			}
 
-			if _, err := strconv.Atoi(args[0]); err != nil {
-				return err
+			for _, arg := range args {
+				if _, err := parseOsdSpec(arg); err != nil {
+					return err
+				}
 			}
 
 			return nil
@@ -165,28 +167,36 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 		Run: func(cmd *cobra.Command, args []string) {
 			M = mustGetCurrentMappingState()
 
-			sourceOsd, _ := strconv.Atoi(args[0])
+			var sourceOsds []int
+			for _, s := range args {
+				osdSpecOsds := mustParseOsdSpec(s)
+				sourceOsds = append(sourceOsds, osdSpecOsds...)
+			}
 			allowMovementAcrossCrushType := mustGetString(cmd, "allow-movement-across")
 			mustParseMaxBackfillReservations(cmd)
 			mustParseMaxSourceBackfills(cmd)
-			targetOsds := mustGetOsdSpecSlice(cmd, "target-osds")
 
+			targetOsds := mustGetOsdSpecSliceMap(cmd, "target-osds")
 			tree := osdTree()
-			sourceOsdNode, ok := tree.IDToNode[sourceOsd]
-			if !ok || sourceOsdNode.Type != "osd" {
-				panic(fmt.Errorf("source OSD %d doesn't exist", sourceOsd))
-			}
 
-			for _, targetOsd := range targetOsds {
+			for targetOsd := range targetOsds {
 				targetOsdNode, ok := tree.IDToNode[targetOsd]
 				if !ok || targetOsdNode.Type != "osd" {
 					panic(fmt.Errorf("target OSD %d doesn't exist", targetOsd))
 				}
 			}
 
+			for _, osd := range sourceOsds {
+				sourceOsdNode, ok := tree.IDToNode[osd]
+				if !ok || sourceOsdNode.Type != "osd" {
+					panic(fmt.Errorf("source OSD %d doesn't exist", osd))
+				}
+				delete(targetOsds, osd)
+			}
+
 			calcPgMappingsToDrainOsd(
 				allowMovementAcrossCrushType,
-				sourceOsd,
+				sourceOsds,
 				targetOsds,
 			)
 			if !confirmProceed() {
@@ -198,7 +208,7 @@ OSDs; rather, the least busy target OSDs and PGs will be selected.
 	}
 
 	undoUpmapsCmd = &cobra.Command{
-		Use:   "undo-upmaps [osd IDs...]",
+		Use:   "undo-upmaps <osdspec> [<osdspec> ...]",
 		Short: "Undo upmap entries for the given source/target OSDs",
 		Long: `Undo upmap entries for the given source/target OSDs.
 
@@ -865,30 +875,26 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 
 func calcPgMappingsToDrainOsd(
 	allowMovementAcrossCrushType string,
-	sourceOsd int,
-	targetOsds []int,
+	sourceOsds []int,
+	targetOsds map[int]struct{},
 ) {
-	candidateMappings := getCandidateMappings(
-		allowMovementAcrossCrushType,
-		sourceOsd,
-		targetOsds,
-	)
+	changed := true
+	for changed {
+		changed = false
+		for _, sourceOsd := range sourceOsds {
+			candidateMappings := getCandidateMappings(
+				allowMovementAcrossCrushType,
+				sourceOsd,
+				mapKeysInt(targetOsds),
+			)
 
-	for len(candidateMappings) > 0 {
-		pgid, ok := remapLeastBusyPg(candidateMappings)
-		if !ok {
-			break
-		}
-
-		// Since this PG has now been remapped, remove it from the candidates.
-		newCandidates := []pgMapping{}
-		for _, m := range candidateMappings {
-			if m.PgID == pgid {
-				continue
+			if len(candidateMappings) > 0 {
+				_, ok := remapLeastBusyPg(candidateMappings)
+				if ok {
+					changed = true
+				}
 			}
-			newCandidates = append(newCandidates, m)
 		}
-		candidateMappings = newCandidates
 	}
 }
 
@@ -1180,4 +1186,14 @@ func confirmProceed() bool {
 	fmt.Println("No changes made - use --yes to apply changes.")
 
 	return false
+}
+
+// mapKeysInt converts a map[int]struct{} into a sorted int slice
+func mapKeysInt(mm map[int]struct{}) []int {
+	ret := make([]int, 0, len(mm))
+	for k := range mm {
+		ret = append(ret, k)
+	}
+	sort.Ints(ret)
+	return ret
 }
