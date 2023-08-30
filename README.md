@@ -20,9 +20,9 @@ The initial version of this tool, which became the `cancel-backfill` command bel
 
 ### Requirements
 
-As mentioned above, the upmap exception table was introduced in Luminous, and this is a hard requirement for pgremapper. However, there were significant improvements to the upmap code throughout the Luminous series. When working with upmaps, it's recommended that you are running Luminous v12.2.13 (the last release), Mimic v13.2.7+, Nautilus v14.2.5+, or newer, at least on the mons/mgrs.
+As mentioned above, the upmap exception table was introduced in Luminous (v12), and this is a hard requirement for pgremapper. However, there were significant improvements to the upmap code in the first couple of years after it was introduced, and thus it's recommended that you are running Luminous v12.2.13 (the last release), Mimic v13.2.7+, Nautilus v14.2.5+, or any newer major release, at least on the mons/mgrs.
 
-We've used `pgremapper` on a variety of versions of Luminous and Nautilus.
+`pgremapper` has been tested on a variety of versions of Luminous, Nautilus, and Pacific.
 
 ### Caveats
 
