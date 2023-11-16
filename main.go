@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -247,7 +246,6 @@ concurrency than the balancer generally will.
 
 			// Randomize OSD list for fairness across multiple
 			// runs.
-			rand.Seed(time.Now().UnixNano())
 			rand.Shuffle(len(osds), func(i, j int) { osds[i], osds[j] = osds[j], osds[i] })
 
 			target := mustGetBool(cmd, "target")

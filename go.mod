@@ -1,6 +1,6 @@
 module github.com/digitalocean/pgremapper
 
-go 1.17
+go 1.21
 
 require (
 	github.com/fatih/color v1.10.0
