@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,8 +31,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
-
-var gitCommit string
 
 var (
 	concurrency int
@@ -503,7 +502,26 @@ JSON format example, remapping PG 1.1 from OSD 100 to OSD 42:
 		Long:  "Print version information",
 
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("git sha %s\n", gitCommit)
+			var gitCommitSha string
+			var lastCommit string
+			var dirtyBuild bool
+
+			info, _ := debug.ReadBuildInfo()
+			for _, kv := range info.Settings {
+				// Full buildinfo dump
+				//fmt.Printf("%s %s\n", kv.Key, kv.Value)
+				switch kv.Key {
+				case "vcs.revision":
+					gitCommitSha = kv.Value
+				case "vcs.time":
+					lastCommit = kv.Value
+				case "vcs.modified":
+					dirtyBuild = kv.Value == "true"
+				}
+			}
+
+			fmt.Printf("git sha %s%s\n", gitCommitSha, If(dirtyBuild, "-dirty", ""))
+			fmt.Printf("git commit-time %s\n", lastCommit)
 		},
 	}
 )
@@ -1194,4 +1212,12 @@ func mapKeysInt(mm map[int]struct{}) []int {
 	}
 	sort.Ints(ret)
 	return ret
+}
+
+// Ternary operator
+func If[T any](cond bool, vtrue, vfalse T) T {
+	if cond {
+		return vtrue
+	}
+	return vfalse
 }
