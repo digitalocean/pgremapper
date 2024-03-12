@@ -77,25 +77,22 @@ func (bs *backfillState) accountForRemap(pgid string, from, to int) {
 	if !ok {
 		panic(fmt.Sprintf("%s: no such PG", pgid))
 	}
-	bs.removeReservations(pgb)
 
-	found := false
 	for i, osd := range pgb.Up {
 		if osd == from {
-			found = true
+			bs.removeReservations(pgb)
 			pgb.Up[i] = to
-			break
+			// Do not use the upmap here as we don't need to strictly re-order the
+			// up set; it's sufficient to consider which OSDs are listed in up and
+			// acting by themselves.
+			reorderUpToMatchActing(pgid, pgb.Up, pgb.Acting, false)
+			bs.addReservations(pgb)
 		}
 	}
-	if !found {
-		panic(fmt.Sprintf("%s: osd %d not in up set", pgid, from))
-	}
-	// Do not use the upmap here as we don't need to strictly re-order the
-	// up set; it's sufficient to consider which OSDs are listed in up and
-	// acting by themselves.
-	reorderUpToMatchActing(pgid, pgb.Up, pgb.Acting, false)
-
-	bs.addReservations(pgb)
+	// We can get here if a remap has been requested where the 'from' OSD
+	// is currently down. As noted in the osdBackfillState type TODO, we
+	// don't handle degraded backfill today.
+	fmt.Printf("pg %s: osd %d not in up set, unable to compute effect of remap on backfill state", pgid, from)
 }
 
 func (bs *backfillState) addReservations(pgb *pgBriefItem) {
