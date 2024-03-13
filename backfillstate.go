@@ -87,6 +87,7 @@ func (bs *backfillState) accountForRemap(pgid string, from, to int) {
 			// acting by themselves.
 			reorderUpToMatchActing(pgid, pgb.Up, pgb.Acting, false)
 			bs.addReservations(pgb)
+			return
 		}
 	}
 	// We can get here if a remap has been requested where the 'from' OSD
