@@ -92,7 +92,7 @@ func (bs *backfillState) accountForRemap(pgid string, from, to int) {
 	// We can get here if a remap has been requested where the 'from' OSD
 	// is currently down. As noted in the osdBackfillState type TODO, we
 	// don't handle degraded backfill today.
-	fmt.Printf("pg %s: osd %d not in up set, unable to compute effect of remap on backfill state", pgid, from)
+	fmt.Printf("pg %s: osd %d not in up set, unable to compute effect of remap on backfill state\n", pgid, from)
 }
 
 func (bs *backfillState) addReservations(pgb *pgBriefItem) {
