@@ -16,6 +16,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -749,9 +750,20 @@ func parseCephCommand(out string, err error, v interface{}) error {
 		return err
 	}
 
-	if err := json.Unmarshal([]byte(out), v); err != nil {
+	sanitized := handleCephInf([]byte(out))
+	if err := json.Unmarshal(sanitized, v); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// Some Ceph commands can return "inf" as a float value; this is not allowed by
+// the json spec or the golang parser (though it is apparently allowed by the
+// Python parser), so we convert such cases to "null".
+func handleCephInf(buf []byte) []byte {
+	buf = bytes.ReplaceAll(buf, []byte("\": inf"), []byte("\": null"))
+	buf = bytes.ReplaceAll(buf, []byte("\":inf"), []byte("\":null"))
+
+	return buf
 }
