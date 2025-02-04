@@ -120,12 +120,16 @@ This is useful during augment scenarios, if you want to control PG movement to t
 $ ceph osd set nobackfill
 $ ceph osd set norebalance
 
+# If you are using PG autoscaler (Nautilus+), also disabe it.
+# ceph osd pool set noautoscale
+
 <perform augment CRUSH changes>
 
 $ ./pgremapper cancel-backfill --yes
 
 $ ceph osd unset norebalance
 $ ceph osd unset nobackfill
+$ ceph osd unset noautoscale
 
 <enable the upmap balancer to begin gentle data movements>
 ```
