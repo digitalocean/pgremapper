@@ -71,7 +71,7 @@ jobs:
               tag_name: '${{ steps.get_version.outputs.VERSION }}'
             });
             
-            return notes;
+            return release.body;
           result-encoding: string
 
       - name: Create Release
