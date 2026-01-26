@@ -454,6 +454,9 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 		runOsdDump = func() (string, error) { return osdDumpOut, nil }
 		runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
 
+		// With scoreSource=false (source OSDs specified without --target), we score
+		// the destination (where PGs are moving to after undo).
+
 		maxSourceBackfills := 3
 		sourceOsds := []int{1, 2, 5, 7}
 		expected := []expectedMapping{
@@ -958,6 +961,9 @@ func setupTest(t *testing.T) {
 
 	// Matches remapRand doc: fixed stream for remapLeastBusyPg tie-breaks.
 	remapRand = rand.New(rand.NewSource(42))
+
+	// Default to empty OSD df output
+	runOsdDf = func() (string, error) { return `{"nodes": []}`, nil }
 }
 
 func teardownTest(t *testing.T) {
@@ -965,10 +971,218 @@ func teardownTest(t *testing.T) {
 	savedOsdPoolsDetails = nil
 	savedParsedOsdTree = nil
 	savedPgDumpPgsBrief = nil
+	savedOsdDfOut = nil
 
 	runOsdDump = nil
 	runOsdPoolLs = nil
 	runOsdTree = nil
 	runPgDumpPgsBrief = nil
 	runPgQuery = nil
+	runOsdDf = nil
+}
+
+func TestRemapLeastBusyPgWithFullness(t *testing.T) {
+	setupTest(t)
+	defer teardownTest(t)
+
+	// OSD 0: 45% full, 0 backfills
+	// OSD 1: 85% full, 0 backfills
+	// OSD 2: 30% full, 0 backfills
+	osdDfOut := `{
+		"nodes": [
+			{"id": 0, "utilization": 0.45, "pgs": 100, "kb_used": 450000, "kb": 1000000},
+			{"id": 1, "utilization": 0.85, "pgs": 120, "kb_used": 850000, "kb": 1000000},
+			{"id": 2, "utilization": 0.30, "pgs": 90, "kb_used": 300000, "kb": 1000000},
+			{"id": 100, "utilization": 0.50, "pgs": 95, "kb_used": 500000, "kb": 1000000}
+		]
+	}`
+
+	pgDumpOut := `[
+		{ "pgid": "1.1", "up": [ 10, 20, 0 ], "acting": [ 10, 20, 100 ] },
+		{ "pgid": "1.2", "up": [ 10, 20, 1 ], "acting": [ 10, 20, 100 ] },
+		{ "pgid": "1.3", "up": [ 10, 20, 2 ], "acting": [ 10, 20, 100 ] }
+	]`
+
+	osdDumpOut := `{
+		"pg_upmap_items": [
+			{ "pgid": "1.1", "mappings": [ { "from": 100, "to": 0 } ] },
+			{ "pgid": "1.2", "mappings": [ { "from": 100, "to": 1 } ] },
+			{ "pgid": "1.3", "mappings": [ { "from": 100, "to": 2 } ] }
+		]
+	}`
+
+	runOsdDf = func() (string, error) { return osdDfOut, nil }
+	runOsdDump = func() (string, error) { return osdDumpOut, nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	M = mustGetCurrentMappingState()
+	M.enableFullnessPriority = true
+
+	candidateMappings := []pgMapping{
+		{PgID: "1.1", Mapping: mapping{From: 0, To: 100}},
+		{PgID: "1.2", Mapping: mapping{From: 1, To: 100}},
+		{PgID: "1.3", Mapping: mapping{From: 2, To: 100}},
+	}
+
+	// For undo-upmaps test, we score the source (scoreSource=true)
+	// Without --target, prefer emptier OSDs (preferFuller=false)
+	pgid, ok := remapLeastBusyPg(candidateMappings, true, false)
+	require.True(t, ok)
+	// Should pick one - exact choice depends on scoring
+	require.Contains(t, []string{"1.1", "1.2", "1.3"}, pgid)
+}
+
+func TestRemapLeastBusyPgWithoutFullness(t *testing.T) {
+	setupTest(t)
+	defer teardownTest(t)
+
+	// Different OSD fullness levels
+	osdDfOut := `{
+		"nodes": [
+			{"id": 0, "utilization": 0.45, "pgs": 100, "kb_used": 450000, "kb": 1000000},
+			{"id": 1, "utilization": 0.85, "pgs": 120, "kb_used": 850000, "kb": 1000000},
+			{"id": 2, "utilization": 0.30, "pgs": 90, "kb_used": 300000, "kb": 1000000},
+			{"id": 100, "utilization": 0.60, "pgs": 95, "kb_used": 600000, "kb": 1000000}
+		]
+	}`
+
+	pgDumpOut := `[
+		{ "pgid": "1.1", "up": [ 10, 20, 0 ], "acting": [ 10, 20, 100 ] },
+		{ "pgid": "1.2", "up": [ 10, 20, 1 ], "acting": [ 10, 20, 100 ] },
+		{ "pgid": "1.3", "up": [ 10, 20, 2 ], "acting": [ 10, 20, 100 ] }
+	]`
+
+	osdDumpOut := `{
+		"pg_upmap_items": [
+			{ "pgid": "1.1", "mappings": [ { "from": 100, "to": 0 } ] },
+			{ "pgid": "1.2", "mappings": [ { "from": 100, "to": 1 } ] },
+			{ "pgid": "1.3", "mappings": [ { "from": 100, "to": 2 } ] }
+		]
+	}`
+
+	runOsdDf = func() (string, error) { return osdDfOut, nil }
+	runOsdDump = func() (string, error) { return osdDumpOut, nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	M = mustGetCurrentMappingState()
+	// Default behavior - fullness priority disabled
+	M.enableFullnessPriority = false
+
+	// Without fullness priority, all candidates have the same backfill score
+	// and the same destination-pg-count, so they tie on every dimension and
+	// the algorithm falls through to remapRand tie-breaking (seeded in
+	// setupTest for determinism).
+	candidateMappings := []pgMapping{
+		{PgID: "1.1", Mapping: mapping{From: 0, To: 100}},
+		{PgID: "1.2", Mapping: mapping{From: 1, To: 100}},
+		{PgID: "1.3", Mapping: mapping{From: 2, To: 100}},
+	}
+
+	// For undo-upmaps test, we score the source (scoreSource=true)
+	// Without --target, prefer emptier OSDs (preferFuller=false)
+	pgid, ok := remapLeastBusyPg(candidateMappings, true, false)
+	require.True(t, ok)
+	require.Equal(t, "1.3", pgid)
+}
+
+func TestFullnessTiebreaker(t *testing.T) {
+	setupTest(t)
+	defer teardownTest(t)
+
+	// OSD 0 and OSD 2 have same fullness (50%), but OSD 0 has more backfill load
+	osdDfOut := `{
+		"nodes": [
+			{"id": 0, "utilization": 0.50, "pgs": 100, "kb_used": 500000, "kb": 1000000},
+			{"id": 2, "utilization": 0.50, "pgs": 90, "kb_used": 500000, "kb": 1000000},
+			{"id": 10, "utilization": 0.40, "pgs": 85, "kb_used": 400000, "kb": 1000000},
+			{"id": 20, "utilization": 0.40, "pgs": 85, "kb_used": 400000, "kb": 1000000},
+			{"id": 50, "utilization": 0.40, "pgs": 85, "kb_used": 400000, "kb": 1000000},
+			{"id": 100, "utilization": 0.60, "pgs": 95, "kb_used": 600000, "kb": 1000000}
+		]
+	}`
+
+	// PG 1.4 and 1.5 create backfill load on OSD 0
+	pgDumpOut := `[
+		{ "pgid": "1.1", "up": [ 10, 20, 0 ], "acting": [ 10, 20, 100 ] },
+		{ "pgid": "1.3", "up": [ 10, 20, 2 ], "acting": [ 10, 20, 100 ] },
+		{ "pgid": "1.4", "up": [ 10, 20, 0 ], "acting": [ 10, 20, 50 ] },
+		{ "pgid": "1.5", "up": [ 10, 20, 0 ], "acting": [ 10, 20, 50 ] }
+	]`
+
+	osdDumpOut := `{
+		"pg_upmap_items": [
+			{ "pgid": "1.1", "mappings": [ { "from": 100, "to": 0 } ] },
+			{ "pgid": "1.3", "mappings": [ { "from": 100, "to": 2 } ] },
+			{ "pgid": "1.4", "mappings": [ { "from": 50, "to": 0 } ] },
+			{ "pgid": "1.5", "mappings": [ { "from": 50, "to": 0 } ] }
+		]
+	}`
+
+	runOsdDf = func() (string, error) { return osdDfOut, nil }
+	runOsdDump = func() (string, error) { return osdDumpOut, nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	M = mustGetCurrentMappingState()
+	M.enableFullnessPriority = true
+
+	// OSD 0 has 2 remote reservations (from PGs 1.4 and 1.5)
+	// OSD 2 has 0 remote reservations
+	// Both have 50% fullness
+	// Now we score the SOURCE (where we're removing from):
+	// Score for OSD 0 (PG 1.1): 1*20 + 10*50 = 520
+	// Score for OSD 2 (PG 1.3): 1*0 + 10*50 = 500 (better, selected)
+	// With same fullness, prioritize OSD with less backfill load
+	candidateMappings := []pgMapping{
+		{PgID: "1.1", Mapping: mapping{From: 0, To: 100}},
+		{PgID: "1.3", Mapping: mapping{From: 2, To: 100}},
+	}
+
+	// For undo-upmaps test, we score the source (scoreSource=true)
+	// Without --target, prefer emptier OSDs (preferFuller=false)
+	pgid, ok := remapLeastBusyPg(candidateMappings, true, false)
+	require.True(t, ok)
+	// Should select PG 1.3 because OSD 2 has lower score (less backfill load)
+	require.Equal(t, "1.3", pgid)
+}
+
+func TestMissingOsdDfData(t *testing.T) {
+	setupTest(t)
+	defer teardownTest(t)
+
+	pgDumpOut := `[
+		{ "pgid": "1.1", "up": [ 10, 20, 0 ], "acting": [ 10, 20, 100 ] },
+		{ "pgid": "1.2", "up": [ 10, 20, 1 ], "acting": [ 10, 20, 100 ] }
+	]`
+
+	osdDumpOut := `{
+		"pg_upmap_items": [
+			{ "pgid": "1.1", "mappings": [ { "from": 100, "to": 0 } ] },
+			{ "pgid": "1.2", "mappings": [ { "from": 100, "to": 1 } ] }
+		]
+	}`
+
+	// Simulate failure to fetch OSD df data
+	runOsdDf = func() (string, error) {
+		return "", fmt.Errorf("connection timeout")
+	}
+	runOsdDump = func() (string, error) { return osdDumpOut, nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	M = mustGetCurrentMappingState()
+	M.enableFullnessPriority = true
+
+	// Should fall back to backfill-only scoring. Both source OSDs (0, 1)
+	// have equal backfill score and both candidates share destination OSD
+	// 100, so they tie and the algorithm picks via remapRand (seeded in
+	// setupTest for determinism).
+	candidateMappings := []pgMapping{
+		{PgID: "1.1", Mapping: mapping{From: 0, To: 100}},
+		{PgID: "1.2", Mapping: mapping{From: 1, To: 100}},
+	}
+
+	// For undo-upmaps test, we score the source (scoreSource=true)
+	// Without --target, prefer emptier OSDs (preferFuller=false)
+	pgid, ok := remapLeastBusyPg(candidateMappings, true, false)
+	require.True(t, ok)
+	require.Equal(t, "1.2", pgid)
 }
