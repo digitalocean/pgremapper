@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -40,6 +41,7 @@ var (
 	runPgDumpPgsBrief = func() (string, error) { return run("ceph", "pg", "dump", "pgs_brief", "-f", "json") }
 	runPgQuery        = func(pgid string) (string, error) { return run("ceph", "pg", pgid, "query", "-f", "json") }
 	runCrushCmp       = func(path string) (string, error) { return runCombined("crushdiff", "compare", path, "--verbose") }
+	runOsdDf          = func() (string, error) { return run("ceph", "osd", "df", "-f", "json") }
 
 	pgQueryPeerRegexp = regexp.MustCompile(`(?P<osd>[0-9]+)(?:\((?P<index>[0-9]+)\))?`)
 	pgIdRegexp        = regexp.MustCompile(`(?P<pool>[0-9]+)\.(?P<id>[0-9a-f]+)`)
@@ -61,6 +63,16 @@ type osdDumpOut struct {
 		Osd int `json:"osd"`
 	} `json:"osds"`
 	PgUpmapItems []*pgUpmapItem `json:"pg_upmap_items"`
+}
+
+type osdDfOut struct {
+	Nodes []struct {
+		ID          int     `json:"id"`
+		Utilization float64 `json:"utilization"`
+		PgsNum      int     `json:"pgs"`
+		KbUsed      int64   `json:"kb_used"`
+		Kb          int64   `json:"kb"`
+	} `json:"nodes"`
 }
 
 type osdTreeOutNode struct {
@@ -518,6 +530,25 @@ func osdDump() *osdDumpOut {
 	mustParseCephCommand(jsonOut, err, &out)
 
 	savedOsdDumpOut = &out
+	return &out
+}
+
+var savedOsdDfOut *osdDfOut
+
+func osdDf() *osdDfOut {
+	if savedOsdDfOut != nil {
+		return savedOsdDfOut
+	}
+	var out osdDfOut
+	jsonOut, err := runOsdDf()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"WARNING: Failed to fetch OSD utilization data: %v\n"+
+				"Falling back to backfill-only scoring\n", err)
+		return &osdDfOut{}
+	}
+	mustParseCephCommand(jsonOut, err, &out)
+	savedOsdDfOut = &out
 	return &out
 }
 

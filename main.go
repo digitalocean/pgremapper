@@ -137,6 +137,7 @@ has been made so far.
 			pgsIncludingOsds := mustGetOsdSpecSliceMap(cmd, "pgs-including")
 
 			M = mustGetCurrentMappingState()
+
 			calcPgMappingsToUndoBackfill(excludeBackfilling, source, target, excludedOsds, includedOsds, excludedPools, includedPools, pgsIncludingOsds)
 			if !confirmProceed() {
 				return
@@ -256,6 +257,10 @@ concurrency than the balancer generally will.
 			target := mustGetBool(cmd, "target")
 			mustParseMaxBackfillReservations(cmd)
 			mustParseMaxSourceBackfills(cmd)
+
+			// Configure fullness prioritization
+			prioritizeFullness := mustGetBool(cmd, "prioritize-fullness")
+			M.enableFullnessPriority = prioritizeFullness
 
 			calcPgMappingsToUndoUpmaps(osds, target)
 			if !confirmProceed() {
@@ -725,6 +730,7 @@ func init() {
 	undoUpmapsCmd.Flags().StringSlice("max-backfill-reservations", []string{}, "limit number of backfill reservations made; format: \"default max[,osdspec:max]\", e.g., \"5,bucket:data10:10\"")
 	undoUpmapsCmd.Flags().Int("max-source-backfills", 1, "max number of backfills to schedule per source OSD, including pre-existing ones")
 	undoUpmapsCmd.Flags().Bool("target", false, "the given OSDs are backfill targets rather than sources")
+	undoUpmapsCmd.Flags().Bool("prioritize-fullness", false, "prioritize removing PGs from fuller OSDs (opt-in)")
 	rootCmd.AddCommand(undoUpmapsCmd)
 
 	rootCmd.AddCommand(remapCmd)
@@ -906,7 +912,7 @@ func calcPgMappingsToDrainOsd(
 			)
 
 			if len(candidateMappings) > 0 {
-				_, ok := remapLeastBusyPg(candidateMappings)
+				_, ok := remapLeastBusyPg(candidateMappings, false, false)
 				if ok {
 					changed = true
 				}
@@ -1012,7 +1018,12 @@ func calcPgMappingsToUndoUpmaps(osds []int, osdsAreTargets bool) {
 				mp.From, mp.To = mp.To, mp.From
 			}
 
-			_, ok := remapLeastBusyPg(candidateMappings)
+			// Scoring logic:
+			// - Without --target: Score TO (after reversal), prefer emptier
+			// - With --target: Score FROM (after reversal), prefer fuller
+			scoreSource := osdsAreTargets
+			preferFuller := osdsAreTargets
+			_, ok := remapLeastBusyPg(candidateMappings, scoreSource, preferFuller)
 			if !ok {
 				continue
 			}
@@ -1021,14 +1032,18 @@ func calcPgMappingsToUndoUpmaps(osds []int, osdsAreTargets bool) {
 	}
 }
 
-func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
+func remapLeastBusyPg(candidateMappings []pgMapping, scoreSource bool, preferFuller bool) (string, bool) {
 	// Pick a remap target in three steps. First, among candidates that still
 	// have room for backfill (hasRoomForRemap), prefer the target OSD with
 	// the fewest PGs in the current up set, using live pg brief state. Second,
-	// break ties using reservation load on that OSD: remote reservations (this
-	// OSD as a backfill target) weigh more than local reservations (this OSD as
-	// primary), via remote*10 + local. Third, if still tied, choose uniformly at
-	// random among those mappings (remapRand).
+	// break ties by a load score on the scored OSD: by default this is
+	// reservation load (remote*10 + local), where remote reservations (this
+	// OSD as a backfill target) weigh more than local. When
+	// --prioritize-fullness is enabled the score becomes a composite of
+	// backfill load and OSD utilization; scoreSource selects whether the
+	// source or destination OSD is scored, and preferFuller inverts the
+	// fullness component so fuller OSDs sort first. Third, if still tied,
+	// choose uniformly at random among those mappings (remapRand).
 	pgCounts := M.bs.pgCountsByOsd()
 	var (
 		found        bool
@@ -1043,8 +1058,33 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 		}
 
 		pgC := pgCounts[m.Mapping.To]
-		obs := M.bs.osd(m.Mapping.To)
-		score := obs.remoteReservations*10 + obs.localReservations
+
+		// For undo operations, score the source (where we're removing from).
+		// For drain operations, score the destination (where we're adding to).
+		scoreOsd := m.Mapping.To
+		if scoreSource {
+			scoreOsd = m.Mapping.From
+		}
+		obs := M.bs.osd(scoreOsd)
+
+		var score int
+		if M.enableFullnessPriority {
+			backfillScore := obs.remoteReservations*10 + obs.localReservations
+			fullnessScore := int(obs.utilization * 100)
+			if preferFuller {
+				fullnessScore = 100 - fullnessScore
+			}
+			score = (M.backfillWeight * backfillScore) + (M.fullnessWeight * fullnessScore)
+
+			if verbose {
+				fmt.Fprintf(os.Stderr,
+					"OSD %d: util=%.1f%%, backfill=%d, score=%d (preferFuller=%v)\n",
+					scoreOsd, obs.utilization*100, backfillScore, score, preferFuller)
+			}
+		} else {
+			score = obs.remoteReservations*10 + obs.localReservations
+		}
+
 		if !found || pgC < bestPgCount || (pgC == bestPgCount && score < bestResScore) {
 			found = true
 			bestPgCount = pgC

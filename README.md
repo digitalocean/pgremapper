@@ -150,6 +150,7 @@ Due to a failure, we know that `data10` is going to need a bunch of recovery, so
 $ ./pgremapper cancel-backfill --pgs-including bucket:data10
 ```
 
+
 ### drain
 
 Remap PGs off of the given source OSD spec(s), up to the given maximum number of scheduled backfills. For each PG, among CRUSH-valid targets that still fit reservation limits, the tool prefers OSDs with fewer PGs in the current `up` set (from `pg dump`), then OSDs with lower backfill reservation load on the target—remote reservations count more than local—and finally breaks remaining ties at random. That spreads drain load toward emptier targets but does not perform whole-cluster balancing.
@@ -260,12 +261,13 @@ Given a list of OSDs, remove (or modify) upmap items such that the OSDs become t
 This is useful for cases where the upmap rebalancer won't do this for us, e.g., performing a swap-bucket where we want the source OSDs to totally drain (vs. balance with the rest of the cluster). It also achieves a much higher level of concurrency than the balancer generally will.
 
 ```
-$ ./pgremapper undo-upmaps <osdspec> [<osdspec> ...] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>] [--target]
+$ ./pgremapper undo-upmaps <osdspec> [<osdspec> ...] [--max-backfill-reservations default_max[,osdspec:max]] [--max-source-backfills <n>] [--target] [--prioritize-fullness]
 ```
 
 * `--max-backfill-reservations`: Consume only the given reservation maximums for backfill. You'll commonly want to set this below your `osd-max-backfills` setting so that any scheduled recoveries may clear without waiting for a backfill to complete. A default value is specified first, and then per-`osdspec` values for cases where you want to allow more backfill or have non-uniform `osd-max-backfills` settings.
 * `--max-source-backfills`: Allow a given source OSD to have this maximum number of backfills scheduled. TODO: This option works for EC systems, where the given OSD truly will be the backfill source; in replicated systems, the primary OSD is the source and thus source concurrency must be controlled via `--max-backfill-reservations`.
 * `--target`: The given list of OSDs should serve as backfill targets, rather than the default of backfill sources.
+* `--prioritize-fullness`: Opt-in flag to prioritize removing PGs from fuller OSDs. When enabled, target OSDs are selected based on a composite score combining OSD utilization (fullness) and backfill load, with fullness as the primary factor. This is especially useful after swap-bucket operations or when trying to rebalance a cluster with uneven disk utilization. Works with both replicated and EC pools.
 
 #### Example - Move PGs back after an OSD recreate
 
@@ -285,6 +287,19 @@ Let's say you swapped data01 and data04, where data04 is an empty replacement fo
 ```
 $ ./pgremapper undo-upmaps bucket:data01 --max-backfill-reservations 2,bucket:data04:3 --max-source-backfills 2
 ```
+
+#### Example - Drain full OSDs first after swap-bucket
+
+After a swap-bucket operation, if you want to preferentially remove PGs from the fuller OSDs on data01 (targeting the emptier replacement OSDs on data04 first):
+```
+$ ./pgremapper undo-upmaps bucket:data01 --prioritize-fullness --max-backfill-reservations 2,bucket:data04:3 --max-source-backfills 2 --yes
+```
+
+When `--prioritize-fullness` is enabled, the algorithm selects target OSDs using:
+```
+score = (backfillWeight * backfillScore) + (fullnessWeight * fullnessScore)
+```
+With default weights (backfillWeight=1, fullnessWeight=10), a 1% difference in fullness is worth roughly 1 reservation slot. If OSD df data cannot be fetched, the tool gracefully falls back to backfill-only scoring.
 
 # Development
 
