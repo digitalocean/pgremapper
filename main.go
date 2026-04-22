@@ -338,7 +338,11 @@ mapping), unless --whole-pg is specified.
 					panic(err)
 				}
 
-				defer f.Close()
+				defer func() {
+					if err := f.Close(); err != nil {
+						panic(err)
+					}
+				}()
 				writer = f
 			}
 
@@ -400,7 +404,11 @@ cluster undergoes some other major changes).
 				if err != nil {
 					panic(err)
 				}
-				defer f.Close()
+				defer func() {
+					if err := f.Close(); err != nil {
+						panic(err)
+					}
+				}()
 
 				writer = f
 			}
@@ -453,7 +461,11 @@ JSON format example, remapping PG 1.1 from OSD 100 to OSD 42:
 					panic(err)
 				}
 
-				defer f.Close()
+				defer func() {
+					if err := f.Close(); err != nil {
+						panic(err)
+					}
+				}()
 				reader = f
 			}
 
@@ -833,7 +845,7 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 								continue
 							}
 
-							if !(included(up[i]) || included(acting[i])) {
+							if !included(up[i]) && !included(acting[i]) {
 								continue
 							}
 						} else {
@@ -843,7 +855,7 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 								continue
 							}
 
-							if !(source && included(up[i]) || target && included(acting[i])) {
+							if (!source || !included(up[i])) && (!target || !included(acting[i])) {
 								continue
 							}
 						}
