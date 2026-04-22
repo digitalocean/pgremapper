@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -764,8 +765,7 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 	ch := make(chan *pgBriefItem)
 
 	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			for pgb := range ch {
 				id := pgb.PgID
 				up := pgb.Up
@@ -796,15 +796,12 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 
 				// Check if we need to reconstruct the original
 				// acting set in the case of a degraded PG.
-				for _, osd := range acting {
-					if osd == invalidOSD {
-						// Reconstruct the original
-						// acting set via a PG query.
-						pqo := pgQuery(id)
-						acting = pqo.getCompletePeers()
-						reorderUpToMatchActing(pgb.PgID, up, acting, true)
-						break
-					}
+				if slices.Contains(acting, invalidOSD) {
+					// Reconstruct the original
+					// acting set via a PG query.
+					pqo := pgQuery(id)
+					acting = pqo.getCompletePeers()
+					reorderUpToMatchActing(pgb.PgID, up, acting, true)
 				}
 
 				if len(pgsIncludingOsds) > 0 {
@@ -877,8 +874,7 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 				}
 			}
 
-			wg.Done()
-		}()
+		})
 	}
 
 	for _, pgb := range pgBriefs {
@@ -1055,7 +1051,7 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 }
 
 func calcPgMappingsToBalanceOsds(osds []int, maxBackfills, targetSpread int) {
-	sort.Slice(osds, func(i, j int) bool { return osds[i] < osds[j] })
+	slices.Sort(osds)
 
 	osdUpPGs := getUpPGsForOsds(osds)
 
