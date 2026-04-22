@@ -46,10 +46,139 @@ go install github.com/digitalocean/pgremapper@latest
 
 Otherwise, clone this repository and use a golang Docker container to build:
 ```
-docker run --rm -v $(pwd):/pgremapper -w /pgremapper golang:1.21.4 go build -o pgremapper .
+docker run --rm -v $(pwd):/pgremapper -w /pgremapper golang:1.26.2 go build -o pgremapper .
 ```
 
 You can also download one of the pre-built binaries from the [releases page](https://github.com/digitalocean/pgremapper/releases).
+
+## Performance Profiling
+
+This repository includes benchmark scaffolding in `benchmark_test.go` so you can profile parsing and remap decision paths without a live Ceph cluster.
+
+### 1) Run benchmarks
+
+Run all benchmarks using Go's default benchtime:
+
+```
+go test -run '^$' -bench=. -benchmem ./...
+```
+
+Run all benchmarks with a fixed time budget per benchmark, saving results to a file:
+
+```
+go test -run '^$' -bench=. -benchtime=60s -benchmem ./... | tee bench-results.txt
+```
+
+Run a specific benchmark family only:
+
+```
+go test -run '^$' -bench='^BenchmarkCalc' -benchtime=60s -benchmem ./...
+```
+
+`-bench=.` matches every benchmark function. `-benchmem` adds `B/op` and `allocs/op` columns.
+
+Benchmark fixture profiles used in `benchmark_test.go`:
+
+* `small`: `pgCount=4096`, `osdCount=128`, and for upmap-heavy cases `upmapCount=300`.
+* `medium`: `pgCount=16384`, `osdCount=512`, and for upmap-heavy cases `upmapCount=1200`.
+* `large`: `pgCount=65536`, `osdCount=2048`, and for upmap-heavy cases `upmapCount=4800`.
+
+Notes:
+
+* All benchmark families include `small`, `medium`, and `large` sub-benchmarks.
+* `-benchtime=60s` applies per benchmark/sub-benchmark that is selected (for example, `.../small` or `.../medium`).
+* Benchmark setup is included in timed sections, so wall-clock runtime more closely tracks the benchtime target.
+* Use `-benchtime=1x` when you want exactly one iteration for quick smoke checks.
+
+### 2) Capture CPU, heap, mutex, and block profiles
+
+```
+go test -run '^$' -bench BenchmarkMustGetCurrentMappingState/large -benchmem \
+  -cpuprofile cpu.out -memprofile mem.out ./...
+```
+
+You can swap the benchmark selector for any benchmark/sub-benchmark, for example:
+
+```
+go test -run '^$' -bench BenchmarkCalcPgMappingsToUndoBackfill/medium -benchmem \
+  -cpuprofile cpu.out -memprofile mem.out ./...
+```
+
+To include mutex and block contention profiles in the same run:
+
+```
+go test -run '^$' -bench BenchmarkCalcPgMappingsToUndoBackfill/medium -benchmem \
+  -cpuprofile cpu.out -memprofile mem.out \
+  -mutexprofile mutex.out -blockprofile block.out ./...
+```
+
+Notes for contention profiles:
+
+* `-mutexprofile` captures time spent waiting on contended mutexes.
+* `-blockprofile` captures goroutine blocking events (channel ops, selects, mutex waits, etc.).
+* In benchmark-wide runs, block profiles often contain significant `testing` harness channel waits; prefer targeted benchmark selectors when investigating an individual code path.
+* If needed, you can tune sampling rates in code via `runtime.SetMutexProfileFraction` and `runtime.SetBlockProfileRate`, but defaults are often sufficient for comparative benchmark runs.
+
+### 3) Inspect profiles with pprof
+
+CPU profile:
+
+```
+go tool pprof -top cpu.out
+```
+
+Heap allocation profile:
+
+```
+go tool pprof -top -alloc_space mem.out
+```
+
+Mutex contention profile (delay view):
+
+```
+go tool pprof -top mutex.out
+```
+
+Block profile (delay view):
+
+```
+go tool pprof -top block.out
+```
+
+Contention/event count views:
+
+```
+go tool pprof -top -sample_index=contentions mutex.out
+go tool pprof -top -sample_index=contentions block.out
+```
+
+To open an interactive web UI:
+
+```
+go tool pprof -http=:8080 cpu.out
+```
+
+Then open `http://localhost:8080` in a browser.
+
+### 4) Useful pprof commands inside interactive mode
+
+If you run `go tool pprof <profile.out>`, these commands are useful:
+
+* `top` - hottest functions by self time
+* `top -cum` - hottest functions by cumulative time
+* `list <function>` - annotated source for a function
+* `web` - render the call graph (requires Graphviz installed)
+
+### 5) Repeatability tips
+
+* Run each benchmark at least 3 times and compare medians.
+* If results are noisy, increase benchmark time:
+
+```
+go test -run '^$' -bench BenchmarkMustGetCurrentMappingState/large -benchmem -benchtime=60s ./...
+```
+
+* Keep your machine load low and avoid running other heavy workloads while profiling.
 
 ## Usage
 

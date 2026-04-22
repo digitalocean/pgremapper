@@ -15,8 +15,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -308,7 +312,7 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setupTest(t)
-			defer teardownTest(t)
+			t.Cleanup(func() { teardownTest(t) })
 
 			runOsdDump = func() (string, error) { return osdDumpOut, nil }
 			runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
@@ -351,9 +355,59 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 	}
 }
 
+func TestCalcPgMappingsToUndoBackfillAppliesAllQueuedRemapsBeforeReturn(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	const pgCount = 200
+	var sb strings.Builder
+	sb.WriteString("[\n")
+	for i := range pgCount {
+		if i > 0 {
+			sb.WriteString(",\n")
+		}
+		fmt.Fprintf(
+			&sb,
+			` { "pgid": "1.%x", "up": [ 1, 100, 3 ], "acting": [ 1, 101, 3 ], "state": "backfill_wait" }`,
+			i,
+		)
+	}
+	sb.WriteString("\n]\n")
+	pgDumpOut := sb.String()
+
+	runOsdDump = func() (string, error) {
+		return `{"pg_upmap_items":[]}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return pgDumpOut, nil
+	}
+
+	prevConcurrency := concurrency
+	concurrency = 1
+	t.Cleanup(func() { concurrency = prevConcurrency })
+
+	M = mustGetCurrentMappingState()
+	calcPgMappingsToUndoBackfill(
+		true, // excludeBackfilling
+		false,
+		false,
+		map[int]struct{}{},
+		map[int]struct{}{},
+		map[int]struct{}{},
+		map[int]struct{}{},
+		map[int]struct{}{},
+	)
+
+	puis := M.dirtyUpmapItems()
+	require.Len(t, puis, pgCount)
+	for _, pui := range puis {
+		require.Equal(t, []mapping{{From: 100, To: 101, dirty: true}}, pui.Mappings)
+	}
+}
+
 func TestCountCurrentBackfills(t *testing.T) {
 	setupTest(t)
-	defer teardownTest(t)
+	t.Cleanup(func() { teardownTest(t) })
 	out := `
 [
  { "pgid": "1.32", "up": [ 7, 5, 9], "acting": [ 7, 5, 9 ] },
@@ -449,7 +503,7 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 
 	t.Run("source OSDs specified", func(t *testing.T) {
 		setupTest(t)
-		defer teardownTest(t)
+		t.Cleanup(func() { teardownTest(t) })
 
 		runOsdDump = func() (string, error) { return osdDumpOut, nil }
 		runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
@@ -472,7 +526,7 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 
 	t.Run("target OSDs specified", func(t *testing.T) {
 		setupTest(t)
-		defer teardownTest(t)
+		t.Cleanup(func() { teardownTest(t) })
 
 		runOsdDump = func() (string, error) { return osdDumpOut, nil }
 		runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
@@ -493,7 +547,7 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 
 	t.Run("max-backfills specified", func(t *testing.T) {
 		setupTest(t)
-		defer teardownTest(t)
+		t.Cleanup(func() { teardownTest(t) })
 
 		runOsdDump = func() (string, error) { return osdDumpOut, nil }
 		runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
@@ -601,7 +655,7 @@ func TestCalcPgMappingsToBalanceHost(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setupTest(t)
-			defer teardownTest(t)
+			t.Cleanup(func() { teardownTest(t) })
 
 			runOsdDump = func() (string, error) { return osdDumpOut, nil }
 			runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
@@ -826,7 +880,7 @@ func TestCalcPgMappingsToDrainOsd(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setupTest(t)
-			defer teardownTest(t)
+			t.Cleanup(func() { teardownTest(t) })
 
 			runOsdDump = func() (string, error) { return osdDumpOut, nil }
 			runOsdTree = func() (string, error) { return osdTreeOut, nil }
@@ -859,6 +913,7 @@ type expectedMapping struct {
 }
 
 func validateDirtyMappings(t *testing.T, expected []expectedMapping) {
+	t.Helper()
 	puis := M.dirtyUpmapItems()
 	require.Len(t, puis, len(expected))
 
@@ -870,7 +925,7 @@ func validateDirtyMappings(t *testing.T, expected []expectedMapping) {
 
 func TestParseMaxBackfillReservations(t *testing.T) {
 	setupTest(t)
-	defer teardownTest(t)
+	t.Cleanup(func() { teardownTest(t) })
 	osdTreeOut := `
 {
   "nodes": [
@@ -901,9 +956,35 @@ func TestParseMaxBackfillReservations(t *testing.T) {
 	require.Equal(t, 6, M.bs.getMaxBackfillReservations(133))
 }
 
+func TestParseMaxBackfillReservationsInvalidSpecifier(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdDump = func() (string, error) { return `{"osds":[],"pg_upmap_items":[]}`, nil }
+	runPgDumpPgsBrief = func() (string, error) { return `[]`, nil }
+	runOsdPoolLs = func() (string, error) {
+		return `[{"pool_id":1,"pool_name":"replicated","erasure_code_profile":""}]`, nil
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().StringSlice("max-backfill-reservations", []string{"4", "invalidspec"}, "")
+
+	M = mustGetCurrentMappingState()
+
+	defer func() {
+		msg := recover()
+		require.NotNil(t, msg)
+		e, ok := msg.(error)
+		require.True(t, ok)
+		require.Contains(t, e.Error(), "is not a valid max-backfill-reservation specifier")
+	}()
+
+	mustParseMaxBackfillReservations(cmd)
+}
+
 func TestDeviceClassFilter(t *testing.T) {
 	setupTest(t)
-	defer teardownTest(t)
+	t.Cleanup(func() { teardownTest(t) })
 	osdTreeOut := `
 	{
 		"nodes": [
@@ -941,7 +1022,508 @@ func TestDeviceClassFilter(t *testing.T) {
 		[]int{9, 10, 11})
 }
 
+func TestImportMappingsFromFileAppliesMappings(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	logPath := installFakeCeph(t)
+
+	runOsdDump = func() (string, error) { return `{"pg_upmap_items":[]}`, nil }
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active+clean","up":[1,2,3],"acting":[1,2,3]}
+		]`, nil
+	}
+
+	inputPath := filepath.Join(t.TempDir(), "import.json")
+	input := []pgMapping{{PgID: "1.1", Mapping: mapping{From: 1, To: 4}}}
+	b, err := json.Marshal(input)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(inputPath, b, 0o600))
+
+	prevYes := yes
+	yes = true
+	t.Cleanup(func() { yes = prevYes })
+
+	importMappingsCommand.Run(importMappingsCommand, []string{inputPath})
+
+	logOut, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Contains(t, string(logOut), "osd pg-upmap-items 1.1 1 4")
+}
+
+func TestImportMappingsFromStdinAppliesMappings(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	logPath := installFakeCeph(t)
+
+	runOsdDump = func() (string, error) { return `{"pg_upmap_items":[]}`, nil }
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active+clean","up":[1,2,3],"acting":[1,2,3]}
+		]`, nil
+	}
+
+	stdinPath := filepath.Join(t.TempDir(), "stdin.json")
+	input := []pgMapping{{PgID: "1.1", Mapping: mapping{From: 2, To: 9}}}
+	b, err := json.Marshal(input)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(stdinPath, b, 0o600))
+
+	f, err := os.Open(stdinPath)
+	require.NoError(t, err)
+	defer f.Close()
+
+	oldStdin := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() { os.Stdin = oldStdin })
+
+	prevYes := yes
+	yes = true
+	t.Cleanup(func() { yes = prevYes })
+
+	importMappingsCommand.Run(importMappingsCommand, nil)
+
+	logOut, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Contains(t, string(logOut), "osd pg-upmap-items 1.1 2 9")
+}
+
+func TestImportMappingsModifiesExistingFromMapping(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	logPath := installFakeCeph(t)
+
+	runOsdDump = func() (string, error) {
+		return `{
+			"pg_upmap_items":[
+				{"pgid":"1.1","mappings":[{"from":1,"to":3}]}
+			]
+		}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active+remapped","up":[3,2,4],"acting":[1,2,4]}
+		]`, nil
+	}
+
+	inputPath := filepath.Join(t.TempDir(), "import.json")
+	input := []pgMapping{{PgID: "1.1", Mapping: mapping{From: 1, To: 8}}}
+	b, err := json.Marshal(input)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(inputPath, b, 0o600))
+
+	prevYes := yes
+	yes = true
+	t.Cleanup(func() { yes = prevYes })
+
+	importMappingsCommand.Run(importMappingsCommand, []string{inputPath})
+
+	logOut, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Contains(t, string(logOut), "osd pg-upmap-items 1.1 1 8")
+}
+
+func TestImportMappingsConfirmProceedFalseDoesNotApply(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	logPath := installFakeCeph(t)
+
+	runOsdDump = func() (string, error) { return `{"pg_upmap_items":[]}`, nil }
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active+clean","up":[1,2,3],"acting":[1,2,3]}
+		]`, nil
+	}
+
+	inputPath := filepath.Join(t.TempDir(), "import.json")
+	input := []pgMapping{{PgID: "1.1", Mapping: mapping{From: 1, To: 4}}}
+	b, err := json.Marshal(input)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(inputPath, b, 0o600))
+
+	prevYes := yes
+	yes = false
+	t.Cleanup(func() { yes = prevYes })
+
+	importMappingsCommand.Run(importMappingsCommand, []string{inputPath})
+
+	logOut, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Empty(t, strings.TrimSpace(string(logOut)))
+	require.NotEmpty(t, M.dirtyUpmapItems())
+}
+
+func TestExportMappingsWritesSelectedMappings(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdDump = func() (string, error) {
+		return `{
+			"pg_upmap_items":[
+				{"pgid":"1.1","mappings":[{"from":1,"to":4},{"from":6,"to":7}]},
+				{"pgid":"1.2","mappings":[{"from":3,"to":1}]}
+			]
+		}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[4,7,8],"acting":[1,6,8]},
+			{"pgid":"1.2","state":"active","up":[1,5,9],"acting":[3,5,9]}
+		]`, nil
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "out.json")
+	require.NoError(t, exportMappingsCommand.Flags().Set("output", outputPath))
+	require.NoError(t, exportMappingsCommand.Flags().Set("whole-pg", "false"))
+
+	exportMappingsCommand.Run(exportMappingsCommand, []string{"1"})
+
+	out, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	var got []pgMapping
+	require.NoError(t, json.Unmarshal(out, &got))
+
+	require.ElementsMatch(t, []pgMapping{
+		{PgID: "1.1", Mapping: mapping{From: 1, To: 4}},
+		{PgID: "1.2", Mapping: mapping{From: 3, To: 1}},
+	}, got)
+}
+
+func TestExportMappingsWholePgIncludesAllMappingsForMatchedPGs(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdDump = func() (string, error) {
+		return `{
+			"pg_upmap_items":[
+				{"pgid":"1.1","mappings":[{"from":1,"to":4},{"from":6,"to":7}]},
+				{"pgid":"1.2","mappings":[{"from":3,"to":9}]}
+			]
+		}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[4,7,8],"acting":[1,6,8]},
+			{"pgid":"1.2","state":"active","up":[9,5,2],"acting":[3,5,2]}
+		]`, nil
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "out.json")
+	require.NoError(t, exportMappingsCommand.Flags().Set("output", outputPath))
+	require.NoError(t, exportMappingsCommand.Flags().Set("whole-pg", "true"))
+
+	exportMappingsCommand.Run(exportMappingsCommand, []string{"1"})
+
+	out, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	var got []pgMapping
+	require.NoError(t, json.Unmarshal(out, &got))
+
+	require.ElementsMatch(t, []pgMapping{
+		{PgID: "1.1", Mapping: mapping{From: 1, To: 4}},
+		{PgID: "1.1", Mapping: mapping{From: 6, To: 7}},
+	}, got)
+}
+
+func TestExportMappingsOutputFileCreatesValidJSON(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdDump = func() (string, error) { return `{"pg_upmap_items":[]}`, nil }
+	runPgDumpPgsBrief = func() (string, error) { return `[]`, nil }
+
+	outputPath := filepath.Join(t.TempDir(), "out.json")
+	require.NoError(t, exportMappingsCommand.Flags().Set("output", outputPath))
+	require.NoError(t, exportMappingsCommand.Flags().Set("whole-pg", "false"))
+
+	exportMappingsCommand.Run(exportMappingsCommand, []string{"1"})
+
+	out, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	var got []pgMapping
+	require.NoError(t, json.Unmarshal(out, &got))
+	require.Empty(t, got)
+}
+
+func TestParseOsdSpec(t *testing.T) {
+	t.Run("osd id", func(t *testing.T) {
+		setupTest(t)
+		t.Cleanup(func() { teardownTest(t) })
+
+		osds, err := parseOsdSpec("42")
+		require.NoError(t, err)
+		require.Equal(t, []int{42}, osds)
+	})
+
+	t.Run("bucket", func(t *testing.T) {
+		setupTest(t)
+		t.Cleanup(func() { teardownTest(t) })
+
+		runOsdTree = func() (string, error) {
+			return `{
+				"nodes": [
+					{"id":-1, "name":"rack1", "type":"rack", "children":[0,1]},
+					{"id":0, "name":"osd.0", "type":"osd", "reweight":1},
+					{"id":1, "name":"osd.1", "type":"osd", "reweight":1}
+				]
+			}`, nil
+		}
+
+		osds, err := parseOsdSpec("bucket:rack1")
+		require.NoError(t, err)
+		require.ElementsMatch(t, []int{0, 1}, osds)
+	})
+
+	t.Run("invalid format and prefix", func(t *testing.T) {
+		setupTest(t)
+		t.Cleanup(func() { teardownTest(t) })
+
+		_, err := parseOsdSpec("not-a-spec")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not a valid osdspec")
+
+		_, err = parseOsdSpec("pool:rack1")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not a valid osdspec")
+	})
+}
+
+func TestParsePoolSpec(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdPoolLs = func() (string, error) {
+		return `[
+			{"pool_id":1, "pool_name":"replicated", "erasure_code_profile":""},
+			{"pool_id":7, "pool_name":"rbd", "erasure_code_profile":""}
+		]`, nil
+	}
+
+	pools, err := parsePoolSpec("7")
+	require.NoError(t, err)
+	require.Equal(t, []int{7}, pools)
+
+	pools, err = parsePoolSpec("rbd")
+	require.NoError(t, err)
+	require.Equal(t, []int{7}, pools)
+
+	_, err = parsePoolSpec("does-not-exist")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is not a valid pool name or ID")
+}
+
+func TestMustParseMaxSourceBackfillsSetsState(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[1],"acting":[1]}
+		]`, nil
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Int("max-source-backfills", 17, "")
+
+	M = mustGetCurrentMappingState()
+	mustParseMaxSourceBackfills(cmd)
+	require.Equal(t, 17, M.bs.maxBackfillsFrom)
+}
+
+func TestMustParseMaxBackfillReservationsDefaultOnly(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[1],"acting":[1]}
+		]`, nil
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().StringSlice("max-backfill-reservations", []string{"4"}, "")
+
+	M = mustGetCurrentMappingState()
+	mustParseMaxBackfillReservations(cmd)
+	require.Equal(t, 4, M.bs.maxBackfillReservations)
+}
+
+func TestMustParseMaxBackfillReservationsDefaultAndOverrides(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdTree = func() (string, error) {
+		return `{
+			"nodes": [
+				{"id":-1, "name":"host1", "type":"host", "children":[1,2]},
+				{"id":1, "name":"osd.1", "type":"osd", "reweight":1},
+				{"id":2, "name":"osd.2", "type":"osd", "reweight":1}
+			]
+		}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[1],"acting":[1]}
+		]`, nil
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().StringSlice("max-backfill-reservations", []string{"4", "bucket:host1:10", "99:6"}, "")
+
+	M = mustGetCurrentMappingState()
+	mustParseMaxBackfillReservations(cmd)
+
+	require.Equal(t, 4, M.bs.maxBackfillReservations)
+	require.Equal(t, 10, M.bs.getMaxBackfillReservations(1))
+	require.Equal(t, 10, M.bs.getMaxBackfillReservations(2))
+	require.Equal(t, 6, M.bs.getMaxBackfillReservations(99))
+}
+
+func TestConfirmProceedStates(t *testing.T) {
+	t.Run("no change", func(t *testing.T) {
+		M = &mappingState{changeState: NoChange}
+		require.False(t, confirmProceed())
+	})
+
+	t.Run("no reservation available", func(t *testing.T) {
+		M = &mappingState{changeState: NoReservationAvailable}
+		require.False(t, confirmProceed())
+	})
+
+	t.Run("yes flag", func(t *testing.T) {
+		prevYes := yes
+		yes = true
+		t.Cleanup(func() { yes = prevYes })
+		M = &mappingState{changeState: ChangesPending}
+		require.True(t, confirmProceed())
+	})
+
+	t.Run("dry run", func(t *testing.T) {
+		prevYes := yes
+		yes = false
+		t.Cleanup(func() { yes = prevYes })
+		M = &mappingState{changeState: ChangesPending}
+		require.False(t, confirmProceed())
+	})
+}
+
+func TestGetCandidateMappingsFiltersInvalidTargets(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdTree = func() (string, error) {
+		return `{
+			"nodes": [
+				{"id":-1, "name":"root", "type":"root", "children":[-2]},
+				{"id":-2, "name":"rack1", "type":"rack", "children":[-3, -4]},
+				{"id":-3, "name":"host1", "type":"host", "children":[0, 1]},
+				{"id":-4, "name":"host2", "type":"host", "children":[2]},
+				{"id":0, "name":"osd.0", "type":"osd", "reweight":1},
+				{"id":1, "name":"osd.1", "type":"osd", "reweight":1},
+				{"id":2, "name":"osd.2", "type":"osd", "reweight":1}
+			]
+		}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[0],"acting":[0]}
+		]`, nil
+	}
+
+	M = mustGetCurrentMappingState()
+	candidates := getCandidateMappings("", 0, []int{0, 1, 2})
+	require.Equal(t, []pgMapping{{PgID: "1.1", Mapping: mapping{From: 0, To: 1}}}, candidates)
+}
+
+func TestIsCandidateMappingDefaultAndCrossTypeRules(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdTree = func() (string, error) {
+		return `{
+			"nodes": [
+				{"id":-1, "name":"root", "type":"root", "children":[-2, -5]},
+				{"id":-2, "name":"rack1", "type":"rack", "children":[-3, -4]},
+				{"id":-3, "name":"host1", "type":"host", "children":[0]},
+				{"id":-4, "name":"host2", "type":"host", "children":[1,2]},
+				{"id":-5, "name":"rack2", "type":"rack", "children":[-6]},
+				{"id":-6, "name":"host3", "type":"host", "children":[3]},
+				{"id":0, "name":"osd.0", "type":"osd", "reweight":1},
+				{"id":1, "name":"osd.1", "type":"osd", "reweight":1},
+				{"id":2, "name":"osd.2", "type":"osd", "reweight":1},
+				{"id":3, "name":"osd.3", "type":"osd", "reweight":1}
+			]
+		}`, nil
+	}
+
+	tree := osdTree()
+	pg := &pgBriefItem{PgID: "1.1", Up: []int{0, 1}}
+
+	require.False(t, isCandidateMapping("", 0, 0, pg, tree, tree.IDToNode[0]))
+	require.False(t, isCandidateMapping("", 0, 1, pg, tree, tree.IDToNode[0]))
+	require.False(t, isCandidateMapping("", 0, 3, pg, tree, tree.IDToNode[0]))
+
+	pg = &pgBriefItem{PgID: "1.1", Up: []int{0}}
+	require.True(t, isCandidateMapping("host", 0, 1, pg, tree, tree.IDToNode[0]))
+	require.False(t, isCandidateMapping("host", 0, 3, pg, tree, tree.IDToNode[0]))
+}
+
+func TestGetUpPGsForOsdsCollectsMatchingPGs(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[1,2],"acting":[1,2]},
+			{"pgid":"1.2","state":"active","up":[3,4],"acting":[3,4]},
+			{"pgid":"1.3","state":"active","up":[2,5],"acting":[2,5]}
+		]`, nil
+	}
+
+	osdPGs := getUpPGsForOsds([]int{2, 4, 7})
+	require.Len(t, osdPGs[2], 2)
+	require.Equal(t, "1.1", osdPGs[2][0].PgID)
+	require.Equal(t, "1.3", osdPGs[2][1].PgID)
+	require.Len(t, osdPGs[4], 1)
+	require.Equal(t, "1.2", osdPGs[4][0].PgID)
+	require.Len(t, osdPGs[7], 0)
+}
+
+func TestRunCombinedAndRunOrDie(t *testing.T) {
+	out, err := runCombined("sh", "-c", "printf 'ok'")
+	require.NoError(t, err)
+	require.Equal(t, "ok", out)
+
+	require.Panics(t, func() {
+		_ = runOrDie("sh", "-c", "exit 2")
+	})
+}
+
+func installFakeCeph(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "ceph.log")
+	require.NoError(t, os.WriteFile(logPath, []byte{}, 0o600))
+	cephPath := filepath.Join(dir, "ceph")
+	content := "#!/bin/sh\necho \"$@\" >> \"" + logPath + "\"\nexit 0\n"
+	require.NoError(t, os.WriteFile(cephPath, []byte(content), 0o755))
+
+	oldPath := os.Getenv("PATH")
+	require.NoError(t, os.Setenv("PATH", dir+":"+oldPath))
+	t.Cleanup(func() {
+		require.NoError(t, os.Setenv("PATH", oldPath))
+	})
+
+	return logPath
+}
+
 func setupTest(t *testing.T) {
+	t.Helper()
 	// By default, report all pools we use as replicated; if there are EC
 	// tests, they can override this implementation.
 	osdPoolDetailout := `
@@ -961,10 +1543,13 @@ func setupTest(t *testing.T) {
 }
 
 func teardownTest(t *testing.T) {
+	t.Helper()
 	savedOsdDumpOut = nil
 	savedOsdPoolsDetails = nil
 	savedParsedOsdTree = nil
 	savedPgDumpPgsBrief = nil
+	savedPgUpmapItemMap = nil
+	savedPgUpmapItemMapSource = nil
 
 	runOsdDump = nil
 	runOsdPoolLs = nil

@@ -24,7 +24,6 @@ import (
 	"os/exec"
 	"runtime/debug"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -595,7 +594,7 @@ func mustParseOsdSpec(s string) []int {
 
 func parseOsdSpec(s string) ([]int, error) {
 	errResponse := func(s string) ([]int, error) {
-		return nil, errors.New(fmt.Sprintf("'%s' is not a valid osdspec - see root command --help", s))
+		return nil, fmt.Errorf("'%s' is not a valid osdspec - see root command --help", s)
 	}
 
 	osd, err := strconv.Atoi(s)
@@ -603,16 +602,16 @@ func parseOsdSpec(s string) ([]int, error) {
 		return []int{osd}, nil
 	}
 
-	spl := strings.SplitN(s, ":", 2)
-	if len(spl) != 2 {
+	prefix, bucketName, ok := strings.Cut(s, ":")
+	if !ok {
 		return errResponse(s)
 	}
 
-	if spl[0] != "bucket" {
+	if prefix != "bucket" {
 		return errResponse(s)
 	}
 
-	osds, err := getOsdsForBucket(spl[1], "")
+	osds, err := getOsdsForBucket(bucketName, "")
 	if err != nil {
 		return nil, err
 	}
@@ -676,17 +675,18 @@ func mustParseMaxBackfillReservations(cmd *cobra.Command) {
 		M.bs.maxBackfillReservations = max
 
 		for _, s := range strs[1:] {
-			spl := strings.Split(s, ":")
-			if len(spl) < 2 {
-				panic(errors.WithStack(errors.New(fmt.Sprintf("'%s' is not a valid max-backfill-reservation specifier", s))))
+			// Find the last ':' to split osdspec and max value without allocating a split slice.
+			idx := strings.LastIndex(s, ":")
+			if idx < 0 {
+				panic(errors.WithStack(fmt.Errorf("'%s' is not a valid max-backfill-reservation specifier", s)))
 			}
 
-			max, err := strconv.Atoi(spl[len(spl)-1])
+			max, err := strconv.Atoi(s[idx+1:])
 			if err != nil {
 				panic(errors.WithStack(err))
 			}
 
-			osds := mustParseOsdSpec(s[0:strings.LastIndex(s, ":")])
+			osds := mustParseOsdSpec(s[:idx])
 			for _, osd := range osds {
 				M.bs.osd(osd).maxBackfillReservations = max
 			}
@@ -764,10 +764,29 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 		return len(includedOsds) == 0 || ok
 	}
 
+	type remapRequest struct {
+		pgid string
+		from int
+		to   int
+	}
+
 	// Run these concurrently in case they need to go to pgQuery, which is
 	// quite slow.
 	wg := sync.WaitGroup{}
 	ch := make(chan *pgBriefItem)
+
+	// Apply remaps through a single goroutine so mapping state mutations keep
+	// the same semantics while removing producer-side lock contention.
+	remapCh := make(chan remapRequest, concurrency*64)
+	remapDone := make(chan struct{})
+	go func() {
+		defer close(remapDone)
+		for r := range remapCh {
+			if err := M.tryRemap(r.pgid, r.from, r.to); err != nil {
+				fmt.Printf("WARNING: %v\n", err)
+			}
+		}
+	}()
 
 	for i := 0; i < concurrency; i++ {
 		wg.Go(func() {
@@ -775,7 +794,14 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 				id := pgb.PgID
 				up := pgb.Up
 				acting := pgb.Acting
-				pool, err := strconv.Atoi(strings.Split(id, ".")[0])
+				// PGIDs are "<pool>.<suffix>"; find the separator once so we
+				// can parse just the pool prefix without allocating a split slice.
+				m := strings.IndexByte(id, '.')
+				if m <= 0 {
+					fmt.Printf("Could not parse pool ID from PG %s\n", id)
+					continue
+				}
+				pool, err := strconv.Atoi(id[:m])
 				if err != nil {
 					fmt.Printf("Could not parse pool ID from PG %s: %s\n", id, err)
 					continue
@@ -811,10 +837,18 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 
 				if len(pgsIncludingOsds) > 0 {
 					include := false
-					for _, osd := range append(acting, up...) {
+					for _, osd := range acting {
 						if _, ok := pgsIncludingOsds[osd]; ok {
 							include = true
 							break
+						}
+					}
+					if !include {
+						for _, osd := range up {
+							if _, ok := pgsIncludingOsds[osd]; ok {
+								include = true
+								break
+							}
 						}
 					}
 					if !include {
@@ -871,9 +905,10 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 						// actually use the upmap
 						// exception table to cancel
 						// the backfill.
-						err := M.tryRemap(id, up[i], acting[i])
-						if err != nil {
-							fmt.Printf("WARNING: %v\n", err)
+						remapCh <- remapRequest{
+							pgid: id,
+							from: up[i],
+							to:   acting[i],
 						}
 					}
 				}
@@ -888,6 +923,8 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 
 	close(ch)
 	wg.Wait()
+	close(remapCh)
+	<-remapDone
 }
 
 func calcPgMappingsToDrainOsd(
@@ -895,6 +932,9 @@ func calcPgMappingsToDrainOsd(
 	sourceOsds []int,
 	targetOsds map[int]struct{},
 ) {
+	// targetOsds does not change in this function; materialize once.
+	targetOsdList := mapKeysInt(targetOsds)
+
 	changed := true
 	for changed {
 		changed = false
@@ -902,7 +942,7 @@ func calcPgMappingsToDrainOsd(
 			candidateMappings := getCandidateMappings(
 				allowMovementAcrossCrushType,
 				sourceOsd,
-				mapKeysInt(targetOsds),
+				targetOsdList,
 			)
 
 			if len(candidateMappings) > 0 {
@@ -920,15 +960,20 @@ func getCandidateMappings(
 	sourceOsd int,
 	targetOsds []int,
 ) []pgMapping {
+	tree := osdTree()
+	sourceOsdNode := tree.IDToNode[sourceOsd]
 	pgs := getUpPGsForOsds([]int{sourceOsd})
-	candidateMappings := []pgMapping{}
-	for _, pg := range pgs[sourceOsd] {
+	sourcePGs := pgs[sourceOsd]
+	candidateMappings := make([]pgMapping, 0, len(sourcePGs)*len(targetOsds))
+	for _, pg := range sourcePGs {
 		for _, targetOsd := range targetOsds {
 			if !isCandidateMapping(
 				allowMovementAcrossCrushType,
 				sourceOsd,
 				targetOsd,
 				pg,
+				tree,
+				sourceOsdNode,
 			) {
 				continue
 			}
@@ -949,13 +994,12 @@ func isCandidateMapping(
 	sourceOsd int,
 	targetOsd int,
 	pg *pgBriefItem,
+	tree *parsedOsdTree,
+	sourceOsdNode *osdTreeNode,
 ) bool {
 	if targetOsd == sourceOsd {
 		return false
 	}
-
-	tree := osdTree()
-	sourceOsdNode := tree.IDToNode[sourceOsd]
 	targetOsdNode := tree.IDToNode[targetOsd]
 
 	if allowMovementAcrossCrushType == "" {
@@ -1221,7 +1265,7 @@ func mapKeysInt(mm map[int]struct{}) []int {
 	for k := range mm {
 		ret = append(ret, k)
 	}
-	sort.Ints(ret)
+	slices.Sort(ret)
 	return ret
 }
 
