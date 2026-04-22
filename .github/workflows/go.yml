@@ -33,10 +33,6 @@ jobs:
       uses: actions/setup-go@v6
       with:
         go-version-file: go.mod
-        cache: true
-
-    - name: Show Go version
-      run: go version
 
     - name: Build
       run: go build -v ./...
@@ -45,7 +41,6 @@ jobs:
       uses: golangci/golangci-lint-action@v9
       with:
         version: v2.11.4
-        args: --enable=gofmt
 
     - name: Test
       run: go test -v ./...
