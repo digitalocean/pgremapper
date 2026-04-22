@@ -224,7 +224,7 @@ func (pgb *pgBriefItem) primaryOsd() int {
 			return osd
 		}
 	}
-	panic(fmt.Sprintf("%s: no valid OSDs found in acting set", pgb.PgID))
+	return die[int]("%s: no valid OSDs found in acting set", pgb.PgID)
 }
 
 func (otn *osdTreeNode) getNearestParentOfType(t string) *osdTreeNode {
@@ -298,16 +298,17 @@ func (pui *pgUpmapItem) do() {
 func (pd *poolsDetails) PgUsesEC(pgid string) bool {
 	m := pgIdRegexp.FindStringSubmatch(pgid)
 	if len(m) != 3 {
-		panic(fmt.Sprintf("can't parse PGID %s", pgid))
+		return die[bool]("can't parse PGID %s", pgid)
 	}
 	poolId, err := strconv.Atoi(m[1])
 	if err != nil {
-		panic(fmt.Sprintf("can't parse pool in PGID %s", pgid))
+		return die[bool]("can't parse pool in PGID %s", pgid)
 	}
-	if pool, ok := pd.Pools[poolId]; ok {
-		return pool.ECProfile != ""
+	pool, ok := pd.Pools[poolId]
+	if !ok {
+		return die[bool]("could not find pool data for PG %s", pgid)
 	}
-	panic(fmt.Sprintf("could not find pool data for PG %s", pgid))
+	return pool.ECProfile != ""
 }
 
 func (r mapping) String() string {
