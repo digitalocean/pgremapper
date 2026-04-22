@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -65,12 +66,7 @@ func sanitizeStaleUpmaps(puis []*pgUpmapItem) {
 	pgBriefs := pgBriefMap()
 
 	hasOSD := func(osdids []int, osdid int) bool {
-		for _, otherOSDID := range osdids {
-			if osdid == otherOSDID {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(osdids, osdid)
 	}
 
 	for _, pui := range puis {
@@ -263,14 +259,12 @@ func (m *mappingState) apply() {
 	ch := make(chan *pgUpmapItem)
 
 	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			for pui := range ch {
 				pui.do()
 			}
 
-			wg.Done()
-		}()
+		})
 	}
 
 	for _, pui := range m.dirtyUpmapItems() {
