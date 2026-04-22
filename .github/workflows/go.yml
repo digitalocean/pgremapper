@@ -30,7 +30,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version-file: go.mod
         cache: true
@@ -42,7 +42,7 @@ jobs:
       run: go build -v ./...
 
     - name: Static code checks
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@v9
       with:
         version: v2.11.4
         args: --out-format=github-actions --enable=gofmt
