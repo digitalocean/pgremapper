@@ -45,8 +45,7 @@ jobs:
       uses: golangci/golangci-lint-action@v9
       with:
         version: v2.11.4
-        args: --out-format=github-actions --enable=gofmt
-        cache: true
+        args: --output=github-actions --enable=gofmt
 
     - name: Test
       run: go test -v ./...
