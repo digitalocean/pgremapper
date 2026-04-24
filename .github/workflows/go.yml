@@ -34,13 +34,17 @@ jobs:
       with:
         go-version-file: go.mod
 
-    - name: Build
-      run: go build -v ./...
-
-    - name: Static code checks
+    - name: Set up golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
         version: v2.11.4
+        install-only: true
+
+    - name: Static code checks (gofmt)
+      run: golangci-lint fmt --diff --enable gofmt
+
+    - name: Build
+      run: go build -v ./...
 
     - name: Test
       run: go test -v ./...
