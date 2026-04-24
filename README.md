@@ -87,6 +87,8 @@ Notes:
 
 * All benchmark families include `small`, `medium`, and `large` sub-benchmarks.
 * `-benchtime=60s` applies per benchmark/sub-benchmark that is selected (for example, `.../small` or `.../medium`).
+* Benchmark setup is included in timed sections, so wall-clock runtime more closely tracks the benchtime target.
+* Use `-benchtime=1x` when you want exactly one iteration for quick smoke checks.
 
 ### 2) Capture CPU and heap profiles
 

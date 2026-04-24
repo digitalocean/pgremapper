@@ -247,11 +247,10 @@ func BenchmarkMustGetCurrentMappingState(b *testing.B) {
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
-				b.StartTimer()
 
 				_ = mustGetCurrentMappingState()
 			}
@@ -280,12 +279,11 @@ func BenchmarkCalcPgMappingsToUndoBackfill(b *testing.B) {
 			includedPools := map[int]struct{}{}
 			pgsIncludingOsds := map[int]struct{}{}
 
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
 				M = mustGetCurrentMappingState()
-				b.StartTimer()
 
 				calcPgMappingsToUndoBackfill(
 					true,
@@ -321,13 +319,12 @@ func BenchmarkCalcPgMappingsToDrainOsd(b *testing.B) {
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
 				M = mustGetCurrentMappingState()
 				M.bs.maxBackfillsFrom = 4096
-				b.StartTimer()
 
 				calcPgMappingsToDrainOsd("", []int{0}, targets)
 			}
@@ -355,13 +352,12 @@ func BenchmarkCalcPgMappingsToUndoUpmaps(b *testing.B) {
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
 				M = mustGetCurrentMappingState()
 				M.bs.maxBackfillsFrom = 4096
-				b.StartTimer()
 
 				calcPgMappingsToUndoUpmaps(osds, false)
 			}
@@ -388,12 +384,11 @@ func BenchmarkCalcPgMappingsToBalanceOsds(b *testing.B) {
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
 				M = mustGetCurrentMappingState()
-				b.StartTimer()
 
 				calcPgMappingsToBalanceOsds(osds, 64, 1)
 			}
@@ -417,12 +412,11 @@ func BenchmarkImportMappingsLoop(b *testing.B) {
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
 				M = mustGetCurrentMappingState()
-				b.StartTimer()
 
 				for _, m := range imports {
 					pui := M.findOrMakeUpmapItem(m.PgID)
@@ -459,8 +453,8 @@ func BenchmarkExportMappings(b *testing.B) {
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
 
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
 				M = mustGetCurrentMappingState()
@@ -469,7 +463,6 @@ func BenchmarkExportMappings(b *testing.B) {
 				for osd := 0; osd < 8 && osd < tt.osdCount; osd++ {
 					filters = append(filters, withFrom(osd), withTo(osd))
 				}
-				b.StartTimer()
 
 				mappings := M.getMappings(mfOr(filters...))
 
@@ -497,18 +490,27 @@ func BenchmarkRemapSingle(b *testing.B) {
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				installFixture(fixture)
 				M = mustGetCurrentMappingState()
 
-				from := (13 + i) % tt.osdCount
+				pgb, ok := M.bs.pgbs["1.0"]
+				if !ok || len(pgb.Up) == 0 {
+					b.Fatalf("missing benchmark PG 1.0 or empty up set")
+				}
+
+				from := pgb.Up[i%len(pgb.Up)]
 				to := (from + 17) % tt.osdCount
+				for _, upOsd := range pgb.Up {
+					if to == upOsd {
+						to = (to + 1) % tt.osdCount
+					}
+				}
 				if to == from {
 					to = (to + 1) % tt.osdCount
 				}
-				b.StartTimer()
 
 				M.mustRemap("1.0", from, to)
 			}
@@ -530,11 +532,10 @@ func BenchmarkGenerateCrushChangeMappings(b *testing.B) {
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				resetBenchmarkGlobals()
 				runCrushCmp = func(_ string) (string, error) { return out, nil }
-				b.StartTimer()
 
 				_, _ = crushCmp("synthetic")
 			}
