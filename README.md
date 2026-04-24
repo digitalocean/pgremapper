@@ -51,6 +51,99 @@ docker run --rm -v $(pwd):/pgremapper -w /pgremapper golang:1.21.4 go build -o p
 
 You can also download one of the pre-built binaries from the [releases page](https://github.com/digitalocean/pgremapper/releases).
 
+## Performance Profiling
+
+This repository includes benchmark scaffolding in `benchmark_test.go` so you can profile parsing and remap decision paths without a live Ceph cluster.
+
+### 1) Run benchmarks
+
+Run all benchmarks using Go's default benchtime:
+
+```
+go test -run '^$' -bench=. -benchmem ./...
+```
+
+Run all benchmarks with a fixed time budget per benchmark, saving results to a file:
+
+```
+go test -run '^$' -bench=. -benchtime=60s -benchmem ./... | tee bench-results.txt
+```
+
+Run a specific benchmark family only:
+
+```
+go test -run '^$' -bench='^BenchmarkCalc' -benchtime=60s -benchmem ./...
+```
+
+`-bench=.` matches every benchmark function. `-benchmem` adds `B/op` and `allocs/op` columns.
+
+Benchmark fixture profiles used in `benchmark_test.go`:
+
+* `small`: `pgCount=4096`, `osdCount=128`, and for upmap-heavy cases `upmapCount=300`.
+* `medium`: `pgCount=16384`, `osdCount=512`, and for upmap-heavy cases `upmapCount=1200`.
+* `large`: `pgCount=65536`, `osdCount=2048`, and for upmap-heavy cases `upmapCount=4800`.
+
+Notes:
+
+* All benchmark families include `small`, `medium`, and `large` sub-benchmarks.
+* `-benchtime=60s` applies per benchmark/sub-benchmark that is selected (for example, `.../small` or `.../medium`).
+
+### 2) Capture CPU and heap profiles
+
+```
+go test -run '^$' -bench BenchmarkMustGetCurrentMappingState/large -benchmem \
+  -cpuprofile cpu.out -memprofile mem.out ./...
+```
+
+You can swap the benchmark selector for any benchmark/sub-benchmark, for example:
+
+```
+go test -run '^$' -bench BenchmarkCalcPgMappingsToUndoBackfill/medium -benchmem \
+  -cpuprofile cpu.out -memprofile mem.out ./...
+```
+
+### 3) Inspect profiles with pprof
+
+CPU profile:
+
+```
+go tool pprof -top cpu.out
+```
+
+Heap allocation profile:
+
+```
+go tool pprof -top -alloc_space mem.out
+```
+
+To open an interactive web UI:
+
+```
+go tool pprof -http=:8080 cpu.out
+```
+
+Then open `http://localhost:8080` in a browser.
+
+### 4) Useful pprof commands inside interactive mode
+
+If you run `go tool pprof cpu.out`, these commands are useful:
+
+* `top` - hottest functions by self time
+* `top -cum` - hottest functions by cumulative time
+* `list <function>` - annotated source for a function
+* `web` - render the call graph (requires Graphviz installed)
+
+### 5) Repeatability tips
+
+* Run each benchmark at least 3 times and compare medians.
+* If results are noisy, increase benchmark time:
+
+```
+go test -run '^$' -bench BenchmarkMustGetCurrentMappingState/large -benchmem -benchtime=60s ./...
+```
+
+* Keep your machine load low and avoid running other heavy workloads while profiling.
+
 ## Usage
 
 `pgremapper` makes no changes by default and has some global options:
