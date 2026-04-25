@@ -186,8 +186,9 @@ func (bs *backfillState) getMaxBackfillReservations(osd int) int {
 }
 
 func computeBackfillSrcsTgts(pgb *pgBriefItem) ([]int, []int) {
-	srcs := []int{}
-	tgts := []int{}
+	// Pre-allocate based on up/acting length; backfills can't exceed this.
+	srcs := make([]int, 0, len(pgb.Acting))
+	tgts := make([]int, 0, len(pgb.Up))
 	up := pgb.Up
 	acting := pgb.Acting
 

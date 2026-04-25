@@ -18,6 +18,8 @@ func resetBenchmarkGlobals() {
 	savedOsdPoolsDetails = nil
 	savedParsedOsdTree = nil
 	savedPgDumpPgsBrief = nil
+	savedPgUpmapItemMap = nil
+	savedPgUpmapItemMapSource = nil
 
 	M = nil
 }
@@ -45,7 +47,7 @@ func makeOsdDumpJSON(osdCount int) string {
 	var b strings.Builder
 	b.Grow(osdCount * 40)
 	b.WriteString("{\n  \"osds\": [\n")
-	for i := 0; i < osdCount; i++ {
+	for i := range osdCount {
 		if i > 0 {
 			b.WriteString(",\n")
 		}
@@ -63,7 +65,7 @@ func makeOsdDumpJSONWithUpmaps(osdCount int, upmapCount int) string {
 	var b strings.Builder
 	b.Grow(osdCount*40 + upmapCount*80)
 	b.WriteString("{\n  \"osds\": [\n")
-	for i := 0; i < osdCount; i++ {
+	for i := range osdCount {
 		if i > 0 {
 			b.WriteString(",\n")
 		}
@@ -102,7 +104,7 @@ func makeOsdTreeJSON(osdCount int, osdsPerHost int) string {
 	b.Grow(osdCount * 50)
 	b.WriteString("{\n  \"nodes\": [\n")
 	b.WriteString("    { \"id\": -1, \"name\": \"default\", \"type\": \"root\", \"children\": [")
-	for h := 0; h < hostCount; h++ {
+	for h := range hostCount {
 		if h > 0 {
 			b.WriteString(",")
 		}
@@ -110,15 +112,12 @@ func makeOsdTreeJSON(osdCount int, osdsPerHost int) string {
 	}
 	b.WriteString("] },\n")
 
-	for h := 0; h < hostCount; h++ {
+	for h := range hostCount {
 		if h > 0 {
 			b.WriteString(",\n")
 		}
 		start := h * osdsPerHost
-		end := start + osdsPerHost
-		if end > osdCount {
-			end = osdCount
-		}
+		end := min(start+osdsPerHost, osdCount)
 		fmt.Fprintf(&b, "    { \"id\": %d, \"name\": \"host%d\", \"type\": \"host\", \"children\": [", -1000-h, h)
 		for i := start; i < end; i++ {
 			if i > start {
@@ -129,7 +128,7 @@ func makeOsdTreeJSON(osdCount int, osdsPerHost int) string {
 		b.WriteString("] }")
 	}
 
-	for i := 0; i < osdCount; i++ {
+	for i := range osdCount {
 		b.WriteString(",\n")
 		fmt.Fprintf(&b, "    { \"id\": %d, \"name\": \"osd.%d\", \"type\": \"osd\", \"reweight\": 1.0 }", i, i)
 	}
@@ -141,7 +140,7 @@ func makePgDumpJSON(pgCount int, osdCount int) string {
 	var b strings.Builder
 	b.Grow(pgCount * 130)
 	b.WriteString("[\n")
-	for i := 0; i < pgCount; i++ {
+	for i := range pgCount {
 		if i > 0 {
 			b.WriteString(",\n")
 		}
@@ -198,20 +197,20 @@ func makeBenchmarkFixtureWithUpmaps(pgCount int, osdCount int, upmapCount int) b
 }
 
 func makeSyntheticImportMappings(count int, osdCount int) []pgMapping {
-	out := make([]pgMapping, 0, count)
-	for i := 0; i < count; i++ {
+	out := make([]pgMapping, count)
+	for i := range count {
 		from := (i + 13) % osdCount
 		to := (from + 17) % osdCount
 		if to == from {
 			to = (to + 1) % osdCount
 		}
-		out = append(out, pgMapping{
+		out[i] = pgMapping{
 			PgID: fmt.Sprintf("1.%x", i),
 			Mapping: mapping{
 				From: from,
 				To:   to,
 			},
-		})
+		}
 	}
 	return out
 }
@@ -220,7 +219,7 @@ func makeSyntheticCrushDiffOutput(pgCount int, osdCount int) string {
 	var b strings.Builder
 	b.Grow(pgCount * 60)
 	b.WriteString("# synthetic crushdiff output\n")
-	for i := 0; i < pgCount; i++ {
+	for i := range pgCount {
 		a0 := i % osdCount
 		a1 := (i + 7) % osdCount
 		a2 := (i + 13) % osdCount

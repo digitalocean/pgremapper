@@ -22,7 +22,7 @@ import (
 
 func TestGetMappings(t *testing.T) {
 	setupTest(t)
-	defer teardownTest(t)
+	t.Cleanup(func() { teardownTest(t) })
 	pgDumpOut := `
 [
  { "pgid": "1.1", "up": [ 1, 2, 4 ], "acting": [ 1, 2, 3 ], "state": "backfill_wait" },
@@ -99,4 +99,42 @@ func TestGetMappings(t *testing.T) {
 			require.ElementsMatch(t, tt.expected, got)
 		})
 	}
+}
+
+func TestTryRemapRemovesExactOppositeMapping(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdDump = func() (string, error) {
+		return `
+{
+  "osds": [],
+  "pg_upmap_items": [
+    { "pgid": "1.1", "mappings": [ { "from": 5, "to": 6 } ] }
+  ]
+}
+`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `
+[
+  { "pgid": "1.1", "up": [ 6 ], "acting": [ 5 ], "state": "active+remapped" }
+]
+`, nil
+	}
+	runOsdPoolLs = func() (string, error) {
+		return `[{"pool_id":1,"pool_name":"replicated","erasure_code_profile":""}]`, nil
+	}
+
+	M = mustGetCurrentMappingState()
+	err := M.tryRemap("1.1", 6, 5)
+	require.NoError(t, err)
+
+	require.Empty(t, M.getMappings(withPgid("1.1")))
+	dirty := M.dirtyUpmapItems()
+	require.Len(t, dirty, 1)
+	require.Len(t, dirty[0].Mappings, 0)
+	require.Len(t, dirty[0].removedMappings, 1)
+	require.Equal(t, 5, dirty[0].removedMappings[0].From)
+	require.Equal(t, 6, dirty[0].removedMappings[0].To)
 }

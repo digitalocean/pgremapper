@@ -15,10 +15,74 @@
 package main
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestHasDuplicateOSDID(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		osdids []int
+		want   bool
+	}{
+		{
+			name:   "nil slice",
+			osdids: nil,
+			want:   false,
+		},
+		{
+			name:   "empty slice",
+			osdids: []int{},
+			want:   false,
+		},
+		{
+			name:   "single element",
+			osdids: []int{7},
+			want:   false,
+		},
+		{
+			name:   "non duplicate normal values",
+			osdids: []int{1, 2, 3},
+			want:   false,
+		},
+		{
+			name:   "duplicate normal values",
+			osdids: []int{1, 2, 1},
+			want:   true,
+		},
+		{
+			name:   "invalid sentinel only",
+			osdids: []int{invalidOSD, invalidOSD, invalidOSD},
+			want:   false,
+		},
+		{
+			name:   "mixed invalid sentinel and duplicate value",
+			osdids: []int{invalidOSD, 7, invalidOSD, 7},
+			want:   true,
+		},
+		{
+			name:   "negative values no duplicate",
+			osdids: []int{-1, -2, -3},
+			want:   false,
+		},
+		{
+			name:   "negative values with duplicate",
+			osdids: []int{-1, -2, -1},
+			want:   true,
+		},
+		{
+			name:   "large int values with duplicate",
+			osdids: []int{math.MaxInt, 42, math.MaxInt},
+			want:   true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, hasDuplicateOSDID(tt.osdids))
+		})
+	}
+}
 
 func TestParseCrushDiff(t *testing.T) {
 	for _, tt := range []struct {
@@ -169,8 +233,155 @@ osdmaptool: osdmap file '/tmp/tmp5ip_axby/osdmap'
 			}
 
 			items, err := crushCmp("")
-			require.Nil(t, err)
-			require.Equal(t, items, tt.items)
+			require.NoError(t, err)
+			require.Equal(t, tt.items, items)
+		})
+	}
+}
+
+func resetCephStateForCacheTest() {
+	savedOsdDumpOut = nil
+	savedOsdPoolsDetails = nil
+	savedParsedOsdTree = nil
+	savedPgDumpPgsBrief = nil
+	savedPgUpmapItemMap = nil
+	savedPgUpmapItemMapSource = nil
+}
+
+func TestPgUpmapItemMapCacheInvalidatesAfterOsdDumpReset(t *testing.T) {
+	resetCephStateForCacheTest()
+	defer teardownTest(t)
+
+	variant := 1
+	runOsdDump = func() (string, error) {
+		if variant == 1 {
+			return `{"pg_upmap_items":[{"pgid":"1.1","mappings":[{"from":10,"to":11}]}]}`, nil
+		}
+		return `{"pg_upmap_items":[{"pgid":"1.2","mappings":[{"from":20,"to":21}]}]}`, nil
+	}
+
+	first := pgUpmapItemMap()
+	require.Contains(t, first, "1.1")
+	require.NotContains(t, first, "1.2")
+
+	variant = 2
+
+	// Without resetting osdDump cache, map should still be the same cached view.
+	second := pgUpmapItemMap()
+	require.Equal(t, first, second)
+	require.Contains(t, second, "1.1")
+	require.NotContains(t, second, "1.2")
+
+	// Resetting osdDump cache should force a fresh map build from new dump content.
+	savedOsdDumpOut = nil
+	third := pgUpmapItemMap()
+	require.NotEqual(t, first, third)
+	require.Contains(t, third, "1.2")
+	require.NotContains(t, third, "1.1")
+}
+
+func TestPgDumpPgsBriefReordersUsingUpmapMappings(t *testing.T) {
+	resetCephStateForCacheTest()
+	defer teardownTest(t)
+
+	runOsdPoolLs = func() (string, error) {
+		return `[
+			{"pool_id": 1, "pool_name": "replicated", "erasure_code_profile": ""}
+		]`, nil
+	}
+	runOsdDump = func() (string, error) {
+		return `{
+			"pg_upmap_items": [
+				{"pgid":"1.1","mappings":[{"from":4,"to":2}]},
+				{"pgid":"1.2","mappings":[{"from":8,"to":6}]}
+			]
+		}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"1.1","state":"active","up":[1,3,2],"acting":[1,4,3]},
+			{"pgid":"1.2","state":"active","up":[5,7,6],"acting":[5,8,7]}
+		]`, nil
+	}
+
+	pgBriefs := pgDumpPgsBrief()
+	require.Len(t, pgBriefs, 2)
+	require.Equal(t, []int{1, 2, 3}, pgBriefs[0].Up)
+	require.Equal(t, []int{5, 6, 7}, pgBriefs[1].Up)
+}
+
+func TestPgDumpPgsBriefDoesNotReorderECPools(t *testing.T) {
+	resetCephStateForCacheTest()
+	defer teardownTest(t)
+
+	runOsdPoolLs = func() (string, error) {
+		return `[
+			{"pool_id": 2, "pool_name": "ec", "erasure_code_profile": "ec-profile"}
+		]`, nil
+	}
+	runOsdDump = func() (string, error) {
+		return `{
+			"pg_upmap_items": [
+				{"pgid":"2.1","mappings":[{"from":4,"to":2}]}
+			]
+		}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return `[
+			{"pgid":"2.1","state":"active","up":[1,3,2],"acting":[1,4,3]}
+		]`, nil
+	}
+
+	pgBriefs := pgDumpPgsBrief()
+	require.Len(t, pgBriefs, 1)
+	// EC pool ordering must be preserved exactly.
+	require.Equal(t, []int{1, 3, 2}, pgBriefs[0].Up)
+}
+
+func TestPgDumpPgsBriefParsesBothJSONShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+	}{
+		{
+			name: "array",
+			out: `[
+				{"pgid":"1.1","state":"active","up":[1,2,3],"acting":[1,2,3]},
+				{"pgid":"1.2","state":"active","up":[4,5,6],"acting":[4,5,6]}
+			]`,
+		},
+		{
+			name: "nautilus+",
+			out: `{
+				"pg_stats": [
+					{"pgid":"1.1","state":"active","up":[1,2,3],"acting":[1,2,3]},
+					{"pgid":"1.2","state":"active","up":[4,5,6],"acting":[4,5,6]}
+				]
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetCephStateForCacheTest()
+			defer teardownTest(t)
+
+			runOsdPoolLs = func() (string, error) {
+				return `[
+					{"pool_id": 1, "pool_name": "replicated", "erasure_code_profile": ""}
+				]`, nil
+			}
+			runOsdDump = func() (string, error) {
+				return `{"pg_upmap_items": []}`, nil
+			}
+			runPgDumpPgsBrief = func() (string, error) {
+				return tt.out, nil
+			}
+
+			pgBriefs := pgDumpPgsBrief()
+			require.Len(t, pgBriefs, 2)
+			require.Equal(t, "1.1", pgBriefs[0].PgID)
+			require.Equal(t, "1.2", pgBriefs[1].PgID)
 		})
 	}
 }
