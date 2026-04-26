@@ -678,7 +678,7 @@ func parseCrushDiff(in string) ([]*pgUpmapItem, error) {
 		// line mapping should look something like follows:
 		//
 		//  1.0	[3, 7, 8] -> [3, 7, 2]
-		if strings.Index(line, "->") < 0 {
+		if !strings.Contains(line, "->") {
 			continue
 		}
 

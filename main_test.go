@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -347,6 +348,56 @@ func TestCalcPgMappingsToUndoBackfill(t *testing.T) {
 
 			validateDirtyMappings(t, tt.expected)
 		})
+	}
+}
+
+func TestCalcPgMappingsToUndoBackfillAppliesAllQueuedRemapsBeforeReturn(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	const pgCount = 200
+	var sb strings.Builder
+	sb.WriteString("[\n")
+	for i := range pgCount {
+		if i > 0 {
+			sb.WriteString(",\n")
+		}
+		fmt.Fprintf(
+			&sb,
+			` { "pgid": "1.%x", "up": [ 1, 100, 3 ], "acting": [ 1, 101, 3 ], "state": "backfill_wait" }`,
+			i,
+		)
+	}
+	sb.WriteString("\n]\n")
+	pgDumpOut := sb.String()
+
+	runOsdDump = func() (string, error) {
+		return `{"pg_upmap_items":[]}`, nil
+	}
+	runPgDumpPgsBrief = func() (string, error) {
+		return pgDumpOut, nil
+	}
+
+	prevConcurrency := concurrency
+	concurrency = 1
+	t.Cleanup(func() { concurrency = prevConcurrency })
+
+	M = mustGetCurrentMappingState()
+	calcPgMappingsToUndoBackfill(
+		true, // excludeBackfilling
+		false,
+		false,
+		map[int]struct{}{},
+		map[int]struct{}{},
+		map[int]struct{}{},
+		map[int]struct{}{},
+		map[int]struct{}{},
+	)
+
+	puis := M.dirtyUpmapItems()
+	require.Len(t, puis, pgCount)
+	for _, pui := range puis {
+		require.Equal(t, []mapping{{From: 100, To: 101, dirty: true}}, pui.Mappings)
 	}
 }
 

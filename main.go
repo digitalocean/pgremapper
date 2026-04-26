@@ -758,10 +758,29 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 		return len(includedOsds) == 0 || ok
 	}
 
+	type remapRequest struct {
+		pgid string
+		from int
+		to   int
+	}
+
 	// Run these concurrently in case they need to go to pgQuery, which is
 	// quite slow.
 	wg := sync.WaitGroup{}
 	ch := make(chan *pgBriefItem)
+
+	// Apply remaps through a single goroutine so mapping state mutations keep
+	// the same semantics while removing producer-side lock contention.
+	remapCh := make(chan remapRequest, concurrency*64)
+	remapDone := make(chan struct{})
+	go func() {
+		defer close(remapDone)
+		for r := range remapCh {
+			if err := M.tryRemap(r.pgid, r.from, r.to); err != nil {
+				fmt.Printf("WARNING: %v\n", err)
+			}
+		}
+	}()
 
 	for i := 0; i < concurrency; i++ {
 		wg.Go(func() {
@@ -880,9 +899,10 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 						// actually use the upmap
 						// exception table to cancel
 						// the backfill.
-						err := M.tryRemap(id, up[i], acting[i])
-						if err != nil {
-							fmt.Printf("WARNING: %v\n", err)
+						remapCh <- remapRequest{
+							pgid: id,
+							from: up[i],
+							to:   acting[i],
 						}
 					}
 				}
@@ -897,6 +917,8 @@ func calcPgMappingsToUndoBackfill(excludeBackfilling, source, target bool, exclu
 
 	close(ch)
 	wg.Wait()
+	close(remapCh)
+	<-remapDone
 }
 
 func calcPgMappingsToDrainOsd(
