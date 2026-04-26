@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -136,15 +137,9 @@ func makeOsdTreeJSON(osdCount int, osdsPerHost int) string {
 	return b.String()
 }
 
-func makePgDumpJSON(pgCount int, osdCount int) string {
-	var b strings.Builder
-	b.Grow(pgCount * 130)
-	b.WriteString("[\n")
+func makeBenchmarkPgStats(pgCount int, osdCount int) []*pgBriefItem {
+	pgStats := make([]*pgBriefItem, 0, pgCount)
 	for i := range pgCount {
-		if i > 0 {
-			b.WriteString(",\n")
-		}
-
 		a0 := i % osdCount
 		a1 := (i + 7) % osdCount
 		a2 := (i + 13) % osdCount
@@ -161,17 +156,35 @@ func makePgDumpJSON(pgCount int, osdCount int) string {
 			state = "active+remapped+backfill_wait"
 		}
 
-		fmt.Fprintf(
-			&b,
-			" { \"pgid\": \"1.%x\", \"up\": [ %d, %d, %d ], \"acting\": [ %d, %d, %d ], \"state\": \"%s\" }",
-			i,
-			u0, u1, u2,
-			a0, a1, a2,
-			state,
-		)
+		pgStats = append(pgStats, &pgBriefItem{
+			PgID:   fmt.Sprintf("1.%x", i),
+			State:  state,
+			Up:     []int{u0, u1, u2},
+			Acting: []int{a0, a1, a2},
+		})
 	}
-	b.WriteString("\n]\n")
-	return b.String()
+
+	return pgStats
+}
+
+func makePgDumpJSON(pgCount int, osdCount int) string {
+	pgStats := makeBenchmarkPgStats(pgCount, osdCount)
+
+	out, err := json.Marshal(pgBriefNautilus{PgStats: pgStats})
+	if err != nil {
+		panic(err)
+	}
+	return string(out)
+}
+
+func makePgDumpJSONLegacy(pgCount int, osdCount int) string {
+	pgStats := makeBenchmarkPgStats(pgCount, osdCount)
+
+	out, err := json.Marshal(pgStats)
+	if err != nil {
+		panic(err)
+	}
+	return string(out)
 }
 
 func makeBenchmarkFixture(pgCount int, osdCount int) benchmarkFixture {
@@ -181,6 +194,12 @@ func makeBenchmarkFixture(pgCount int, osdCount int) benchmarkFixture {
 		osdTree: makeOsdTreeJSON(osdCount, 8),
 		poolLs:  makePoolJSON(),
 	}
+}
+
+func makeBenchmarkFixtureLegacy(pgCount int, osdCount int) benchmarkFixture {
+	f := makeBenchmarkFixture(pgCount, osdCount)
+	f.pgDump = makePgDumpJSONLegacy(pgCount, osdCount)
+	return f
 }
 
 func makeBenchmarkFixtureWithUpmaps(pgCount int, osdCount int, upmapCount int) benchmarkFixture {
@@ -243,6 +262,31 @@ func BenchmarkMustGetCurrentMappingState(b *testing.B) {
 		{name: "large", pgCount: 65536, osdCount: 2048},
 	} {
 		fixture := makeBenchmarkFixture(tt.pgCount, tt.osdCount)
+
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				resetBenchmarkGlobals()
+				installFixture(fixture)
+
+				_ = mustGetCurrentMappingState()
+			}
+		})
+	}
+}
+
+func BenchmarkMustGetCurrentMappingStateLegacyJSON(b *testing.B) {
+	for _, tt := range []struct {
+		name     string
+		pgCount  int
+		osdCount int
+	}{
+		{name: "small", pgCount: 4096, osdCount: 128},
+		{name: "medium", pgCount: 16384, osdCount: 512},
+		{name: "large", pgCount: 65536, osdCount: 2048},
+	} {
+		fixture := makeBenchmarkFixtureLegacy(tt.pgCount, tt.osdCount)
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()

@@ -957,8 +957,9 @@ func getCandidateMappings(
 	tree := osdTree()
 	sourceOsdNode := tree.IDToNode[sourceOsd]
 	pgs := getUpPGsForOsds([]int{sourceOsd})
-	candidateMappings := []pgMapping{}
-	for _, pg := range pgs[sourceOsd] {
+	sourcePGs := pgs[sourceOsd]
+	candidateMappings := make([]pgMapping, 0, len(sourcePGs)*len(targetOsds))
+	for _, pg := range sourcePGs {
 		for _, targetOsd := range targetOsds {
 			if !isCandidateMapping(
 				allowMovementAcrossCrushType,

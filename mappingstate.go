@@ -83,19 +83,22 @@ func sanitizeStaleUpmaps(puis []*pgUpmapItem) {
 		}
 	}
 
-	hasOSD := func(osdids []int, osdid int) bool {
-		return slices.Contains(osdids, osdid)
-	}
-
 	for _, pui := range puis {
 		pgBrief, ok := pgBriefs[pui.PgID]
 		if !ok {
 			continue
 		}
 
-		finalMappings := []mapping{}
+		upSet := make(map[int]struct{}, len(pgBrief.Up))
+		for _, osd := range pgBrief.Up {
+			upSet[osd] = struct{}{}
+		}
+
+		finalMappings := make([]mapping, 0, len(pui.Mappings))
 		for _, m := range pui.Mappings {
-			if hasOSD(pgBrief.Up, m.From) || !hasOSD(pgBrief.Up, m.To) {
+			_, fromInUp := upSet[m.From]
+			_, toInUp := upSet[m.To]
+			if fromInUp || !toInUp {
 				// This mapping has no effect on the PG and is
 				// thus stale, but Ceph hasn't cleaned it up.
 				// It will get in the way of our own decision

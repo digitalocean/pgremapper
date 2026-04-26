@@ -103,3 +103,87 @@ func TestBackfillState(t *testing.T) {
 	require.Equal(t, 1, bs.osd(77).remoteReservations)
 	require.Equal(t, 1, bs.osd(77).backfillsFrom)
 }
+
+func TestHasRoomForRemapDoesNotMutateState(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	pgDumpOut := `
+[
+ { "pgid": "1.01", "up": [ 77, 1, 2 ], "acting": [ 77, 1, 2 ] },
+ { "pgid": "1.02", "up": [ 77, 3, 4 ], "acting": [ 77, 3, 5 ] },
+ { "pgid": "1.03", "up": [ 77, 5, 6 ], "acting": [ 3, 5, 7 ] }
+]
+`
+	runOsdDump = func() (string, error) { return "{}", nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	bs := mustGetCurrentBackfillState()
+
+	type osdCounters struct {
+		local, remote, from, max int
+	}
+	snapshotOSDs := func() map[int]osdCounters {
+		out := make(map[int]osdCounters, len(bs.osds))
+		for osd, s := range bs.osds {
+			out[osd] = osdCounters{
+				local:  s.localReservations,
+				remote: s.remoteReservations,
+				from:   s.backfillsFrom,
+				max:    s.maxBackfillReservations,
+			}
+		}
+		return out
+	}
+	snapshotUp := func() map[string][]int {
+		out := make(map[string][]int, len(bs.pgbs))
+		for id, pgb := range bs.pgbs {
+			dup := make([]int, len(pgb.Up))
+			copy(dup, pgb.Up)
+			out[id] = dup
+		}
+		return out
+	}
+
+	beforeOSDs := snapshotOSDs()
+	beforeUp := snapshotUp()
+
+	// Valid remap probe path; hasRoomForRemap applies and reverts internally.
+	_ = bs.hasRoomForRemap("1.02", 4, 5)
+
+	require.Equal(t, beforeOSDs, snapshotOSDs())
+	require.Equal(t, beforeUp, snapshotUp())
+}
+
+func TestHasRoomForRemapRespectsSourceAndTargetLimits(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	pgDumpOut := `
+[
+ { "pgid": "1.01", "up": [ 77, 1, 2 ], "acting": [ 77, 1, 2 ] },
+ { "pgid": "1.02", "up": [ 77, 3, 4 ], "acting": [ 77, 3, 5 ] },
+ { "pgid": "1.03", "up": [ 77, 5, 6 ], "acting": [ 3, 5, 7 ] }
+]
+`
+	runOsdDump = func() (string, error) { return "{}", nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	t.Run("source backfill limit", func(t *testing.T) {
+		bs := mustGetCurrentBackfillState()
+		// from=4 currently has no source backfills; cap at 0 blocks it.
+		bs.maxBackfillsFrom = 0
+		require.False(t, bs.hasRoomForRemap("1.02", 4, 5))
+	})
+
+	t.Run("target reservation limit", func(t *testing.T) {
+		bs := mustGetCurrentBackfillState()
+		// Make source limit permissive so target-side check is exercised.
+		bs.maxBackfillsFrom = 1000
+
+		// 1.01 is currently clean. Remapping 1->6 introduces backfill with target=6.
+		// Cap target OSD 6 at zero reservations so this must be rejected.
+		bs.osd(6).maxBackfillReservations = 0
+		require.False(t, bs.hasRoomForRemap("1.01", 1, 6))
+	})
+}

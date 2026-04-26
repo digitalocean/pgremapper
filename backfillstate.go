@@ -166,9 +166,12 @@ func (bs *backfillState) hasRoomForRemap(pgid string, from, to int) bool {
 		hasRoom = false
 	}
 
-	_, tgts := computeBackfillSrcsTgts(pgb)
-	for _, osd := range tgts {
-		if bs.osd(osd).remoteReservations > bs.getMaxBackfillReservations(osd) {
+	// Avoid transient target-slice allocation in this hot check path.
+	for i := range pgb.Acting {
+		if pgb.Up[i] == pgb.Acting[i] {
+			continue
+		}
+		if bs.osd(pgb.Up[i]).remoteReservations > bs.getMaxBackfillReservations(pgb.Up[i]) {
 			hasRoom = false
 		}
 	}

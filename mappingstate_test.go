@@ -138,3 +138,68 @@ func TestTryRemapRemovesExactOppositeMapping(t *testing.T) {
 	require.Equal(t, 5, dirty[0].removedMappings[0].From)
 	require.Equal(t, 6, dirty[0].removedMappings[0].To)
 }
+
+func TestSanitizeStaleUpmapsFiltersByUpSetAndLeavesUnknownPGUntouched(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	runOsdDump = func() (string, error) {
+		return `
+{
+  "osds": [],
+  "pg_upmap_items": [
+    {
+      "pgid": "1.1",
+      "mappings": [
+        { "from": 1, "to": 2 },
+        { "from": 4, "to": 5 },
+        { "from": 4, "to": 2 },
+        { "from": 2, "to": 3 }
+      ]
+    },
+    {
+      "pgid": "1.2",
+      "mappings": [
+        { "from": 8, "to": 9 }
+      ]
+    }
+  ]
+}
+`, nil
+	}
+
+	runPgDumpPgsBrief = func() (string, error) {
+		return `
+[
+  { "pgid": "1.1", "up": [ 1, 2, 3 ], "acting": [ 1, 2, 3 ], "state": "active+clean" }
+]
+`, nil
+	}
+
+	M = mustGetCurrentMappingState()
+
+	var p11, p12 *pgUpmapItem
+	for _, pui := range M.pgUpmapItems {
+		switch pui.PgID {
+		case "1.1":
+			p11 = pui
+		case "1.2":
+			p12 = pui
+		}
+	}
+
+	require.NotNil(t, p11)
+	require.NotNil(t, p12)
+
+	// Only mapping 4->2 should remain for 1.1.
+	require.Equal(t, []mapping{{From: 4, To: 2}}, p11.Mappings)
+	require.ElementsMatch(t, []mapping{
+		{From: 1, To: 2, dirty: true},
+		{From: 4, To: 5, dirty: true},
+		{From: 2, To: 3, dirty: true},
+	}, p11.staleMappings)
+
+	// PG 1.2 has no pg_brief entry; it should remain untouched.
+	require.Equal(t, []mapping{{From: 8, To: 9}}, p12.Mappings)
+	require.Empty(t, p12.staleMappings)
+}
