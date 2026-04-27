@@ -281,7 +281,8 @@ $ ./pgremapper cancel-backfill --pgs-including bucket:data10
 
 ### drain
 
-Remap PGs off of the given source OSD spec(s), up to the given maximum number of scheduled backfills. No attempt is made to balance the fullness of the target OSDs; rather, the least busy target OSDs and PGs will be selected.
+Remap PGs off of the given source OSD spec(s), up to the given maximum number of scheduled backfills. The remapping logic uses a capped reservation penalty in its scoring function: it strongly prefers target OSDs with fewer remote reservations, but once the cap is reached, it distributes PGs to balance PG counts as evenly as possible across all targets. This opportunistic balancing improves usage balance and reduces skew, while ensuring no OSD is permanently excluded due to high reservation counts.
+
 If a source OSD is included among target OSDs, it will be removed from the targets.
 
 ```

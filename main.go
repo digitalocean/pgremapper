@@ -1065,11 +1065,22 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 		bestScore   = int(math.MaxInt32)
 		bestMapping pgMapping
 	)
-	// Look for a candidate OSD to remap to that has the lowest reservation
-	// score. We consider the remote reservation count (the count of
-	// backfills in which this OSD is the target) to be more important than
-	// the local reservation count (the count of backfills for which this
-	// OSD is primary), and thus apply a weight to it.
+	// Select the candidate OSD to remap to with the lowest "busy" score.
+	// The score is calculated as: min(remoteReservations, cap)*2 + currentPGCount, where cap is typically 2.
+	//
+	// Why cap=2?
+	// - With cap=2, OSDs with 0, 1, or 2 remote reservations are strongly preferred for new PGs, but once an OSD reaches 2 reservations,
+	//   the penalty stops increasing. This ensures that OSDs with high reservations are not permanently excluded from receiving PGs,
+	//   and the algorithm will begin to balance PG counts more evenly once all targets are "full enough".
+	// - This value was chosen because, in practice, reservation slots above 2 are often already busy, and further penalizing them
+	//   does not improve balance but can lead to unnecessary skew (overloading OSDs with fewer reservations).
+	//
+	// Impact of higher cap values:
+	// - Raising the cap (e.g., to 3, 4, or 5) makes the algorithm avoid OSDs with high reservations for longer, causing PGs to pile up
+	//   on OSDs with fewer reservations. This can result in less even PG distribution and higher risk of overloading those OSDs.
+	// - Lower cap values (like 2) strike a balance between respecting reservation pressure and achieving even PG distribution.
+	//
+	// Once the capped penalty is reached for all OSDs, PGs are distributed to balance PG counts as evenly as possible across OSDs.
 	for _, m := range candidateMappings {
 		if !M.bs.hasRoomForRemap(m.PgID, m.Mapping.From, m.Mapping.To) {
 			M.changeState = updateChangeState(NoReservationAvailable)
@@ -1077,7 +1088,9 @@ func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
 		}
 
 		obs := M.bs.osd(m.Mapping.To)
-		score := obs.remoteReservations*10 + obs.localReservations
+		upPGs := getUpPGsForOsds([]int{m.Mapping.To})
+		currentPGCount := len(upPGs[m.Mapping.To])
+		score := min(obs.remoteReservations, 2)*2 + currentPGCount
 		if score < bestScore {
 			found = true
 			bestScore = score
