@@ -20,25 +20,31 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v6
       with:
-        go-version: 1.21.4
+        go-version-file: go.mod
+
+    - name: Set up golangci-lint
+      uses: golangci/golangci-lint-action@v9
+      with:
+        version: v2.11.4
+        install-only: true
+
+    - name: Static code checks (gofmt)
+      run: golangci-lint fmt --diff --enable gofmt
 
     - name: Build
       run: go build -v ./...
-
-    - name: Static code checks
-      uses: golangci/golangci-lint-action@v3
-      with:
-        version: v1.54
-        args: --enable=gofmt
 
     - name: Test
       run: go test -v ./...

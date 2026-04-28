@@ -739,13 +739,13 @@ func parsePGRemapEntry(entry string) (*pgUpmapItem, error) {
 	}, nil
 }
 
-func mustParseCephCommand(out string, err error, v interface{}) {
+func mustParseCephCommand(out string, err error, v any) {
 	if err := parseCephCommand(out, err, v); err != nil {
 		panic(errors.WithStack(err))
 	}
 }
 
-func parseCephCommand(out string, err error, v interface{}) error {
+func parseCephCommand(out string, err error, v any) error {
 	if err != nil {
 		return err
 	}
