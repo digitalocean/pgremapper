@@ -28,10 +28,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
+
+// remapRand is only used in remapLeastBusyPg for tie-breaking. init seeds it from the clock;
+// tests reset it in setupTest so expectations are stable (do not use this elsewhere).
+var remapRand = rand.New(rand.NewSource(1))
 
 var (
 	concurrency int
@@ -147,8 +152,8 @@ has been made so far.
 		Long: `Drain PGs from one or more source OSDs to the target OSDs.
 
 Remap PGs off of the given source OSD, up to the given maximum number of
-scheduled backfills. No attempt is made to balance the fullness of the target
-OSDs; rather, the least busy target OSDs and PGs will be selected.
+scheduled backfills. Among valid targets, those with fewer PGs in the up set are
+preferred, then lower backfill reservation load on the target (ties broken at random).
 `,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -690,6 +695,7 @@ func mustParseMaxBackfillReservations(cmd *cobra.Command) {
 }
 
 func init() {
+	remapRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	rootCmd.PersistentFlags().IntVar(&concurrency, "concurrency", 5, "number of commands to issue in parallel")
 	rootCmd.PersistentFlags().BoolVar(&yes, "yes", false, "skip confirmations and dry-run output")
 	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "display Ceph commands being run")
@@ -1016,34 +1022,44 @@ func calcPgMappingsToUndoUpmaps(osds []int, osdsAreTargets bool) {
 }
 
 func remapLeastBusyPg(candidateMappings []pgMapping) (string, bool) {
+	// Pick a remap target in three steps. First, among candidates that still
+	// have room for backfill (hasRoomForRemap), prefer the target OSD with
+	// the fewest PGs in the current up set, using live pg brief state. Second,
+	// break ties using reservation load on that OSD: remote reservations (this
+	// OSD as a backfill target) weigh more than local reservations (this OSD as
+	// primary), via remote*10 + local. Third, if still tied, choose uniformly at
+	// random among those mappings (remapRand).
+	pgCounts := M.bs.pgCountsByOsd()
 	var (
-		found       bool
-		bestScore   = int(math.MaxInt32)
-		bestMapping pgMapping
+		found        bool
+		bestPgCount  = int(math.MaxInt32)
+		bestResScore = int(math.MaxInt32)
+		ties         []pgMapping
 	)
-	// Look for a candidate OSD to remap to that has the lowest reservation
-	// score. We consider the remote reservation count (the count of
-	// backfills in which this OSD is the target) to be more important than
-	// the local reservation count (the count of backfills for which this
-	// OSD is primary), and thus apply a weight to it.
 	for _, m := range candidateMappings {
 		if !M.bs.hasRoomForRemap(m.PgID, m.Mapping.From, m.Mapping.To) {
 			M.changeState = updateChangeState(NoReservationAvailable)
 			continue
 		}
 
+		pgC := pgCounts[m.Mapping.To]
 		obs := M.bs.osd(m.Mapping.To)
 		score := obs.remoteReservations*10 + obs.localReservations
-		if score < bestScore {
+		if !found || pgC < bestPgCount || (pgC == bestPgCount && score < bestResScore) {
 			found = true
-			bestScore = score
-			bestMapping = m
+			bestPgCount = pgC
+			bestResScore = score
+			ties = []pgMapping{m}
+		} else if pgC == bestPgCount && score == bestResScore {
+			ties = append(ties, m)
 		}
 	}
 	if !found {
 		return "", false
 	}
 
+	// Uniform choice among candidates tied on PG count and reservation score.
+	bestMapping := ties[remapRand.Intn(len(ties))]
 	M.mustRemap(bestMapping.PgID, bestMapping.Mapping.From, bestMapping.Mapping.To)
 
 	return bestMapping.PgID, true

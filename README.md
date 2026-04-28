@@ -152,7 +152,7 @@ $ ./pgremapper cancel-backfill --pgs-including bucket:data10
 
 ### drain
 
-Remap PGs off of the given source OSD spec(s), up to the given maximum number of scheduled backfills. No attempt is made to balance the fullness of the target OSDs; rather, the least busy target OSDs and PGs will be selected.
+Remap PGs off of the given source OSD spec(s), up to the given maximum number of scheduled backfills. For each PG, among CRUSH-valid targets that still fit reservation limits, the tool prefers OSDs with fewer PGs in the current `up` set (from `pg dump`), then OSDs with lower backfill reservation load on the target—remote reservations count more than local—and finally breaks remaining ties at random. That spreads drain load toward emptier targets but does not perform whole-cluster balancing.
 If a source OSD is included among target OSDs, it will be removed from the targets.
 
 ```
@@ -255,7 +255,7 @@ $ ./pgremapper remap <pg ID> <source osd ID> <target osd ID>
 
 ### undo-upmaps
 
-Given a list of OSDs, remove (or modify) upmap items such that the OSDs become the source (or target if `--target` is specified) of backfill operations (i.e.  they are currently the "To" ("From") of the upmap items) up to the backfill limits specified. Backfill is spread across target and primary OSDs in a best-effort manner.
+Given a list of OSDs, remove (or modify) upmap items such that the OSDs become the source (or target if `--target` is specified) of backfill operations (i.e. they are currently the "To" ("From") of the upmap items) up to the backfill limits specified. Among eligible undos that still fit those limits, each scheduled remap picks among its candidates using the same preference order as [`drain`](#drain): targets with fewer PGs in the current `up` set (from `pg dump`), then lower backfill reservation load on the target—remote reservations count more than local—and random tie-breaks. See [`drain`](#drain) for the exact behavior and caveats (this spreads load toward emptier targets but does not perform whole-cluster balancing).
 
 This is useful for cases where the upmap rebalancer won't do this for us, e.g., performing a swap-bucket where we want the source OSDs to totally drain (vs. balance with the rest of the cluster). It also achieves a much higher level of concurrency than the balancer generally will.
 

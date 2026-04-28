@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -500,8 +501,8 @@ func TestCalcPgMappingsToUndoUpmaps(t *testing.T) {
 		targetOsds := []int{0}
 		expected := []expectedMapping{
 			{ID: "1.33", Mappings: nil},
-			{ID: "1.34", Mappings: nil},
-			{ID: "1.8a", Mappings: nil},
+			{ID: "1.46", Mappings: nil},
+			{ID: "1.8b", Mappings: []mapping{{From: 1, To: 7}}},
 		}
 
 		M = mustGetCurrentMappingState()
@@ -776,7 +777,7 @@ func TestCalcPgMappingsToDrainOsd(t *testing.T) {
 			expected: []expectedMapping{
 				{ID: "1.32", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
 				{ID: "1.33", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
-				{ID: "1.34", Mappings: []mapping{{From: 0, To: 3, dirty: true}}},
+				{ID: "1.35", Mappings: []mapping{{From: 0, To: 3, dirty: true}}},
 			},
 		},
 		{
@@ -786,7 +787,7 @@ func TestCalcPgMappingsToDrainOsd(t *testing.T) {
 			expected: []expectedMapping{
 				{ID: "1.32", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
 				{ID: "1.33", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
-				{ID: "1.35", Mappings: []mapping{{From: 0, To: 5, dirty: true}}},
+				{ID: "1.35", Mappings: []mapping{{From: 0, To: 3, dirty: true}}},
 			},
 		},
 		// Movements allowed across racks - weird case enabled by PGs
@@ -797,7 +798,7 @@ func TestCalcPgMappingsToDrainOsd(t *testing.T) {
 			targetOsds:                   []int{1, 2, 3, 5, 8, 12, 16},
 			expected: []expectedMapping{
 				{ID: "1.32", Mappings: []mapping{{From: 0, To: 2, dirty: true}}},
-				{ID: "1.33", Mappings: []mapping{{From: 0, To: 8, dirty: true}}},
+				{ID: "1.33", Mappings: []mapping{{From: 0, To: 12, dirty: true}}},
 				{ID: "1.34", Mappings: []mapping{{From: 0, To: 12, dirty: true}}},
 			},
 		},
@@ -954,6 +955,9 @@ func setupTest(t *testing.T) {
 
 	// We only need the upmap items from this; default to empty.
 	runOsdDump = func() (string, error) { return "{}", nil }
+
+	// Matches remapRand doc: fixed stream for remapLeastBusyPg tie-breaks.
+	remapRand = rand.New(rand.NewSource(42))
 }
 
 func teardownTest(t *testing.T) {
