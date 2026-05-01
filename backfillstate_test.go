@@ -103,3 +103,24 @@ func TestBackfillState(t *testing.T) {
 	require.Equal(t, 1, bs.osd(77).remoteReservations)
 	require.Equal(t, 1, bs.osd(77).backfillsFrom)
 }
+
+func TestPgCountsByOsd(t *testing.T) {
+	setupTest(t)
+	defer teardownTest(t)
+	pgDumpOut := `
+[
+ { "pgid": "1.01", "up": [ 77, 1, 2 ], "acting": [ 77, 1, 2 ] },
+ { "pgid": "1.02", "up": [ 77, 3, 4 ], "acting": [ 77, 3, 5 ] }
+]
+`
+	runOsdDump = func() (string, error) { return "{}", nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	bs := mustGetCurrentBackfillState()
+	c := bs.pgCountsByOsd()
+	require.Equal(t, 2, c[77])
+	require.Equal(t, 1, c[1])
+	require.Equal(t, 1, c[2])
+	require.Equal(t, 1, c[3])
+	require.Equal(t, 1, c[4])
+}

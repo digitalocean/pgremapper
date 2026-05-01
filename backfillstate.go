@@ -185,6 +185,17 @@ func (bs *backfillState) getMaxBackfillReservations(osd int) int {
 	return bs.maxBackfillReservations
 }
 
+// pgCountsByOsd returns how many PGs list each OSD in their up set (live bs.pgbs).
+func (bs *backfillState) pgCountsByOsd() map[int]int {
+	counts := make(map[int]int)
+	for _, pgb := range bs.pgbs {
+		for _, osd := range pgb.Up {
+			counts[osd]++
+		}
+	}
+	return counts
+}
+
 func computeBackfillSrcsTgts(pgb *pgBriefItem) ([]int, []int) {
 	srcs := []int{}
 	tgts := []int{}
