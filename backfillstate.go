@@ -108,8 +108,8 @@ func (bs *backfillState) accountForRemap(pgid string, from, to int) {
 }
 
 func (bs *backfillState) addReservations(pgb *pgBriefItem) {
-	var srcBuf [8]int
-	var tgtBuf [8]int
+	srcBuf := make([]int, 0, len(pgb.Acting))
+	tgtBuf := make([]int, 0, len(pgb.Acting))
 	srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 	for _, osd := range srcs {
 		bs.osd(osd).backfillsFrom++
@@ -123,8 +123,8 @@ func (bs *backfillState) addReservations(pgb *pgBriefItem) {
 }
 
 func (bs *backfillState) removeReservations(pgb *pgBriefItem) {
-	var srcBuf [8]int
-	var tgtBuf [8]int
+	srcBuf := make([]int, 0, len(pgb.Acting))
+	tgtBuf := make([]int, 0, len(pgb.Acting))
 	srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 	for _, osd := range srcs {
 		obs := bs.osd(osd)

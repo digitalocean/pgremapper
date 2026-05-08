@@ -238,8 +238,8 @@ func TestComputeBackfillSrcsTgts(t *testing.T) {
 			Acting: []int{1, 22, 3, 4, 5, 66},
 		}
 
-		var srcBuf [8]int
-		var tgtBuf [8]int
+		srcBuf := make([]int, 0, len(pgb.Acting))
+		tgtBuf := make([]int, 0, len(pgb.Acting))
 		srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 
 		require.Equal(t, []int{22, 3, 5, 66}, srcs)
@@ -253,8 +253,8 @@ func TestComputeBackfillSrcsTgts(t *testing.T) {
 			Acting: []int{1, 2, 3},
 		}
 
-		var srcBuf [8]int
-		var tgtBuf [8]int
+		srcBuf := make([]int, 0, len(pgb.Acting))
+		tgtBuf := make([]int, 0, len(pgb.Acting))
 		srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 
 		require.Empty(t, srcs)
@@ -274,8 +274,8 @@ func TestComputeBackfillSrcsTgts(t *testing.T) {
 		}
 		pgb := &pgBriefItem{PgID: "1.4", Up: up, Acting: acting}
 
-		var srcBuf [8]int
-		var tgtBuf [8]int
+		srcBuf := make([]int, 0, len(pgb.Acting))
+		tgtBuf := make([]int, 0, len(pgb.Acting))
 		srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 
 		require.Equal(t, expectSrc, srcs)

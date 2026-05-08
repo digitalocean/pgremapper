@@ -1,4 +1,4 @@
-// Copyright 2021 DigitalOcean
+// Copyright 2026 DigitalOcean
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -678,6 +678,62 @@ func BenchmarkHasRoomForRemap(b *testing.B) {
 	}
 }
 
+func BenchmarkAddReservations(b *testing.B) {
+	for _, tt := range []struct {
+		name     string
+		pgCount  int
+		osdCount int
+	}{
+		{name: "small", pgCount: 4096, osdCount: 128},
+		{name: "medium", pgCount: 16384, osdCount: 512},
+		{name: "large", pgCount: 65536, osdCount: 2048},
+	} {
+		pgStats := makeBenchmarkPgStats(tt.pgCount, tt.osdCount)
+
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bs := makeBackfillState()
+				for _, pgb := range pgStats {
+					bs.addReservations(pgb)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkRemoveReservations(b *testing.B) {
+	for _, tt := range []struct {
+		name     string
+		pgCount  int
+		osdCount int
+	}{
+		{name: "small", pgCount: 4096, osdCount: 128},
+		{name: "medium", pgCount: 16384, osdCount: 512},
+		{name: "large", pgCount: 65536, osdCount: 2048},
+	} {
+		pgStats := makeBenchmarkPgStats(tt.pgCount, tt.osdCount)
+
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				bs := makeBackfillState()
+				for _, pgb := range pgStats {
+					bs.addReservations(pgb)
+				}
+				b.StartTimer()
+
+				for _, pgb := range pgStats {
+					bs.removeReservations(pgb)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkComputeBackfillSrcsTgts(b *testing.B) {
 	pgb := &pgBriefItem{
 		PgID:   "1.bench",
@@ -685,8 +741,8 @@ func BenchmarkComputeBackfillSrcsTgts(b *testing.B) {
 		Up:     []int{1, 2, 33, 4, 55, 6},
 		Acting: []int{1, 22, 3, 4, 5, 66},
 	}
-	var srcBuf [8]int
-	var tgtBuf [8]int
+	srcBuf := make([]int, 0, len(pgb.Acting))
+	tgtBuf := make([]int, 0, len(pgb.Acting))
 
 	b.ReportAllocs()
 	b.ResetTimer()
