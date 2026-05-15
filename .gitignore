@@ -1,1 +1,4 @@
 pgremapper
+*.sw[op]
+.claude/*
+build_command.txt

@@ -41,6 +41,10 @@ type mappingState struct {
 	bs           *backfillState
 	changeState  changeStateType
 
+	enableFullnessPriority bool
+	fullnessWeight         int
+	backfillWeight         int
+
 	l sync.Mutex
 }
 
@@ -57,8 +61,11 @@ func mustGetCurrentMappingState() *mappingState {
 	sort.Slice(items, func(i, j int) bool { return items[i].PgID < items[j].PgID })
 	sanitizeStaleUpmaps(items)
 	return &mappingState{
-		pgUpmapItems: osdDumpOut.PgUpmapItems,
-		bs:           mustGetCurrentBackfillState(),
+		pgUpmapItems:           osdDumpOut.PgUpmapItems,
+		bs:                     mustGetCurrentBackfillState(),
+		enableFullnessPriority: false,
+		fullnessWeight:         10,
+		backfillWeight:         1,
 	}
 }
 

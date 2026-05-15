@@ -37,6 +37,9 @@ type osdBackfillState struct {
 	// this occurs as well (e.g., what happens when there are multiple
 	// backfill targets?).
 	backfillsFrom int
+
+	// OSD utilization from 0.0 to 1.0
+	utilization float64
 }
 
 type backfillState struct {
@@ -53,9 +56,25 @@ func mustGetCurrentBackfillState() *backfillState {
 	pgBriefs := pgDumpPgsBrief()
 	bs := makeBackfillState()
 
+	// Fetch and populate OSD utilization data
+	osdDfData := osdDf()
+	osdDfMap := make(map[int]float64)
+	for _, node := range osdDfData.Nodes {
+		if node.ID >= 0 {
+			osdDfMap[node.ID] = node.Utilization
+		}
+	}
+
 	for _, pgb := range pgBriefs {
 		bs.pgbs[pgb.PgID] = pgb
 		bs.addReservations(pgb)
+
+		// Ensure all OSDs in this PG have their utilization set
+		for _, osd := range append(pgb.Up, pgb.Acting...) {
+			if util, ok := osdDfMap[osd]; ok {
+				bs.osd(osd).utilization = util
+			}
+		}
 	}
 	return bs
 }
