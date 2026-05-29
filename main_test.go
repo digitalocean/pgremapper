@@ -1460,16 +1460,16 @@ func TestIsCandidateMappingDefaultAndCrossTypeRules(t *testing.T) {
 		}`, nil
 	}
 
-	_ = osdTree()
+	tree := osdTree()
 	pg := &pgBriefItem{PgID: "1.1", Up: []int{0, 1}}
 
-	require.False(t, isCandidateMapping("", 0, 0, pg))
-	require.False(t, isCandidateMapping("", 0, 1, pg))
-	require.False(t, isCandidateMapping("", 0, 3, pg))
+	require.False(t, isCandidateMapping("", 0, 0, pg, tree, tree.IDToNode[0]))
+	require.False(t, isCandidateMapping("", 0, 1, pg, tree, tree.IDToNode[0]))
+	require.False(t, isCandidateMapping("", 0, 3, pg, tree, tree.IDToNode[0]))
 
 	pg = &pgBriefItem{PgID: "1.1", Up: []int{0}}
-	require.True(t, isCandidateMapping("host", 0, 1, pg))
-	require.False(t, isCandidateMapping("host", 0, 3, pg))
+	require.True(t, isCandidateMapping("host", 0, 1, pg, tree, tree.IDToNode[0]))
+	require.False(t, isCandidateMapping("host", 0, 3, pg, tree, tree.IDToNode[0]))
 }
 
 func TestGetUpPGsForOsdsCollectsMatchingPGs(t *testing.T) {
@@ -1548,6 +1548,8 @@ func teardownTest(t *testing.T) {
 	savedOsdPoolsDetails = nil
 	savedParsedOsdTree = nil
 	savedPgDumpPgsBrief = nil
+	savedPgUpmapItemMap = nil
+	savedPgUpmapItemMapSource = nil
 
 	runOsdDump = nil
 	runOsdPoolLs = nil
