@@ -4,3 +4,4 @@ pgremapper
 bench-results.txt
 profiles/
 *.prof
+*.test
