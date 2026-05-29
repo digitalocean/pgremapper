@@ -125,6 +125,27 @@ func TestPgCountsByOsd(t *testing.T) {
 	require.Equal(t, 1, c[4])
 }
 
+func TestBackfillStatePrePopulatesAllKnownOSDs(t *testing.T) {
+	setupTest(t)
+	t.Cleanup(func() { teardownTest(t) })
+
+	pgDumpOut := `
+[
+ { "pgid": "1.01", "up": [ 1, 2, 3 ], "acting": [ 1, 2, 3 ] },
+ { "pgid": "1.02", "up": [ 4, 5, 6 ], "acting": [ 4, 5, 9 ] }
+]
+`
+	runOsdDump = func() (string, error) { return "{}", nil }
+	runPgDumpPgsBrief = func() (string, error) { return pgDumpOut, nil }
+
+	bs := mustGetCurrentBackfillState()
+
+	for _, osd := range []int{1, 2, 3, 4, 5, 6, 9} {
+		_, ok := bs.osds[osd]
+		require.True(t, ok, "osd %d should be pre-populated in bs.osds", osd)
+	}
+}
+
 func TestHasRoomForRemapDoesNotMutateState(t *testing.T) {
 	setupTest(t)
 	t.Cleanup(func() { teardownTest(t) })
@@ -217,7 +238,9 @@ func TestComputeBackfillSrcsTgts(t *testing.T) {
 			Acting: []int{1, 22, 3, 4, 5, 66},
 		}
 
-		srcs, tgts := computeBackfillSrcsTgts(pgb)
+		srcBuf := make([]int, 0, len(pgb.Acting))
+		tgtBuf := make([]int, 0, len(pgb.Acting))
+		srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 
 		require.Equal(t, []int{22, 3, 5, 66}, srcs)
 		require.Equal(t, []int{2, 33, 55, 6}, tgts)
@@ -230,7 +253,9 @@ func TestComputeBackfillSrcsTgts(t *testing.T) {
 			Acting: []int{1, 2, 3},
 		}
 
-		srcs, tgts := computeBackfillSrcsTgts(pgb)
+		srcBuf := make([]int, 0, len(pgb.Acting))
+		tgtBuf := make([]int, 0, len(pgb.Acting))
+		srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 
 		require.Empty(t, srcs)
 		require.Empty(t, tgts)
@@ -249,7 +274,9 @@ func TestComputeBackfillSrcsTgts(t *testing.T) {
 		}
 		pgb := &pgBriefItem{PgID: "1.4", Up: up, Acting: acting}
 
-		srcs, tgts := computeBackfillSrcsTgts(pgb)
+		srcBuf := make([]int, 0, len(pgb.Acting))
+		tgtBuf := make([]int, 0, len(pgb.Acting))
+		srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 
 		require.Equal(t, expectSrc, srcs)
 		require.Equal(t, expectTgt, tgts)

@@ -40,8 +40,9 @@ type osdBackfillState struct {
 }
 
 type backfillState struct {
-	osds map[int]*osdBackfillState
-	pgbs map[string]*pgBriefItem
+	osds     map[int]*osdBackfillState
+	pgbs     map[string]*pgBriefItem
+	pgCounts map[int]int
 
 	maxBackfillsFrom int
 	// The configured default max backfill reservations when not specified
@@ -56,14 +57,22 @@ func mustGetCurrentBackfillState() *backfillState {
 	for _, pgb := range pgBriefs {
 		bs.pgbs[pgb.PgID] = pgb
 		bs.addReservations(pgb)
+		for _, osd := range pgb.Up {
+			bs.pgCounts[osd]++
+			bs.osd(osd)
+		}
+		for _, osd := range pgb.Acting {
+			bs.osd(osd)
+		}
 	}
 	return bs
 }
 
 func makeBackfillState() *backfillState {
 	return &backfillState{
-		osds: make(map[int]*osdBackfillState),
-		pgbs: make(map[string]*pgBriefItem),
+		osds:     make(map[int]*osdBackfillState),
+		pgbs:     make(map[string]*pgBriefItem),
+		pgCounts: make(map[int]int),
 
 		maxBackfillsFrom:        math.MaxInt32,
 		maxBackfillReservations: math.MaxInt32,
@@ -82,6 +91,8 @@ func (bs *backfillState) accountForRemap(pgid string, from, to int) {
 		if osd == from {
 			bs.removeReservations(pgb)
 			pgb.Up[i] = to
+			bs.pgCounts[from]--
+			bs.pgCounts[to]++
 			// Do not use the upmap here as we don't need to strictly re-order the
 			// up set; it's sufficient to consider which OSDs are listed in up and
 			// acting by themselves.
@@ -97,7 +108,9 @@ func (bs *backfillState) accountForRemap(pgid string, from, to int) {
 }
 
 func (bs *backfillState) addReservations(pgb *pgBriefItem) {
-	srcs, tgts := computeBackfillSrcsTgts(pgb)
+	srcBuf := make([]int, 0, len(pgb.Acting))
+	tgtBuf := make([]int, 0, len(pgb.Acting))
+	srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 	for _, osd := range srcs {
 		bs.osd(osd).backfillsFrom++
 	}
@@ -110,7 +123,9 @@ func (bs *backfillState) addReservations(pgb *pgBriefItem) {
 }
 
 func (bs *backfillState) removeReservations(pgb *pgBriefItem) {
-	srcs, tgts := computeBackfillSrcsTgts(pgb)
+	srcBuf := make([]int, 0, len(pgb.Acting))
+	tgtBuf := make([]int, 0, len(pgb.Acting))
+	srcs, tgts := computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 	for _, osd := range srcs {
 		obs := bs.osd(osd)
 		if obs.backfillsFrom == 0 {
@@ -166,9 +181,12 @@ func (bs *backfillState) hasRoomForRemap(pgid string, from, to int) bool {
 		hasRoom = false
 	}
 
-	_, tgts := computeBackfillSrcsTgts(pgb)
-	for _, osd := range tgts {
-		if bs.osd(osd).remoteReservations > bs.getMaxBackfillReservations(osd) {
+	// Avoid transient target-slice allocation in this hot check path.
+	for i := range pgb.Acting {
+		if pgb.Up[i] == pgb.Acting[i] {
+			continue
+		}
+		if bs.osd(pgb.Up[i]).remoteReservations > bs.getMaxBackfillReservations(pgb.Up[i]) {
 			hasRoom = false
 		}
 	}
@@ -185,20 +203,16 @@ func (bs *backfillState) getMaxBackfillReservations(osd int) int {
 	return bs.maxBackfillReservations
 }
 
-// pgCountsByOsd returns how many PGs list each OSD in their up set (live bs.pgbs).
+// pgCountsByOsd returns how many PGs list each OSD in their up set.
+// The returned map is the live backing store; callers must not mutate it.
 func (bs *backfillState) pgCountsByOsd() map[int]int {
-	counts := make(map[int]int)
-	for _, pgb := range bs.pgbs {
-		for _, osd := range pgb.Up {
-			counts[osd]++
-		}
-	}
-	return counts
+	return bs.pgCounts
 }
 
-func computeBackfillSrcsTgts(pgb *pgBriefItem) ([]int, []int) {
-	srcs := []int{}
-	tgts := []int{}
+func computeBackfillSrcsTgts(pgb *pgBriefItem, srcs, tgts []int) ([]int, []int) {
+	// Reuse caller-provided buffers when possible to avoid per-call allocations.
+	srcs = srcs[:0]
+	tgts = tgts[:0]
 	up := pgb.Up
 	acting := pgb.Acting
 
