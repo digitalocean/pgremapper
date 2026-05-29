@@ -1,1 +1,7 @@
 pgremapper
+
+# benchmark outputs
+bench-results.txt
+profiles/
+*.prof
+*.test
