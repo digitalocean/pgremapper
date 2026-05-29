@@ -33,6 +33,8 @@ func resetBenchmarkGlobals() {
 	savedOsdPoolsDetails = nil
 	savedParsedOsdTree = nil
 	savedPgDumpPgsBrief = nil
+	savedPgUpmapItemMap = nil
+	savedPgUpmapItemMapSource = nil
 
 	M = nil
 }

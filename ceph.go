@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -42,7 +42,6 @@ var (
 	runCrushCmp       = func(path string) (string, error) { return runCombined("crushdiff", "compare", path, "--verbose") }
 
 	pgQueryPeerRegexp = regexp.MustCompile(`(?P<osd>[0-9]+)(?:\((?P<index>[0-9]+)\))?`)
-	pgIdRegexp        = regexp.MustCompile(`(?P<pool>[0-9]+)\.(?P<id>[0-9a-f]+)`)
 )
 
 type pgUpmapItem struct {
@@ -95,6 +94,9 @@ type osdPoolDetail struct {
 
 type poolsDetails struct {
 	Pools map[int]*osdPoolDetail
+	// UsesEC caches whether each pool ID is erasure-coded, computed once at
+	// build time so PgUsesEC doesn't need to re-evaluate ECProfile on every call.
+	UsesEC map[int]bool
 }
 
 type parsedOsdTree struct {
@@ -289,23 +291,26 @@ func (pui *pgUpmapItem) do() {
 
 	cmd := []string{"ceph", "osd", "pg-upmap-items", pui.PgID}
 	for _, m := range pui.Mappings {
-		cmd = append(cmd, fmt.Sprintf("%d", m.From), fmt.Sprintf("%d", m.To))
+		cmd = append(cmd, strconv.Itoa(m.From), strconv.Itoa(m.To))
 	}
 	_ = runOrDie(cmd...)
 }
 
 // Detect whether a given PG belongs to an erasure-coded pool
 func (pd *poolsDetails) PgUsesEC(pgid string) bool {
-	m := pgIdRegexp.FindStringSubmatch(pgid)
-	if len(m) != 3 {
+	// PGID format is always "<poolid>.<hex>" — extract the pool ID with a
+	// simple byte scan rather than a regex to avoid per-call allocations.
+	m := strings.IndexByte(pgid, '.')
+	if m <= 0 {
 		panic(fmt.Sprintf("can't parse PGID %s", pgid))
 	}
-	poolId, err := strconv.Atoi(m[1])
+	poolId, err := strconv.Atoi(pgid[:m])
 	if err != nil {
 		panic(fmt.Sprintf("can't parse pool in PGID %s", pgid))
 	}
-	if pool, ok := pd.Pools[poolId]; ok {
-		return pool.ECProfile != ""
+	// UsesEC was precomputed when poolsDetails was built; no string comparison needed here.
+	if usesEC, ok := pd.UsesEC[poolId]; ok {
+		return usesEC
 	}
 	panic(fmt.Sprintf("could not find pool data for PG %s", pgid))
 }
@@ -373,6 +378,8 @@ func countCurrentBackfills() (map[int]int, map[int]int) {
 }
 
 var savedPgDumpPgsBrief []*pgBriefItem
+var savedPgUpmapItemMap map[string]*pgUpmapItem
+var savedPgUpmapItemMapSource *osdDumpOut
 
 func pgDumpPgsBrief() []*pgBriefItem {
 	if len(savedPgDumpPgsBrief) > 0 {
@@ -386,18 +393,29 @@ func pgDumpPgsBrief() []*pgBriefItem {
 
 	var pgBriefs []*pgBriefItem
 
-	if err := json.Unmarshal([]byte(out), &pgBriefs); err != nil {
-		// Newer versions of Ceph have a slightly different structure.
-		var pgBriefNautilusOut pgBriefNautilus
-		if err := json.Unmarshal([]byte(out), &pgBriefNautilusOut); err != nil {
+	// Try Nautilus+ style wrapper first, then fall back to direct array format.
+	var pgBriefNautilusOut pgBriefNautilus
+	if err := json.Unmarshal([]byte(out), &pgBriefNautilusOut); err == nil {
+		pgBriefs = pgBriefNautilusOut.PgStats
+	} else {
+		if err := json.Unmarshal([]byte(out), &pgBriefs); err != nil {
 			panic(errors.WithStack(err))
 		}
-		pgBriefs = pgBriefNautilusOut.PgStats
 	}
 	pgBriefs = sanitizePgBriefs(pgBriefs)
+	pools := osdPoolDetails()
+	upmapItemsByPg := pgUpmapItemMap()
 
 	for _, pgb := range pgBriefs {
-		reorderUpToMatchActing(pgb.PgID, pgb.Up, pgb.Acting, true)
+		// Fast path: if up already matches acting and no upmap item exists
+		// for this PG, reordering cannot change anything.
+		if slices.Equal(pgb.Up, pgb.Acting) {
+			if _, ok := upmapItemsByPg[pgb.PgID]; !ok {
+				continue
+			}
+		}
+
+		reorderUpToMatchActingWithContext(pgb.PgID, pgb.Up, pgb.Acting, true, pools, upmapItemsByPg)
 	}
 
 	savedPgDumpPgsBrief = pgBriefs
@@ -406,7 +424,8 @@ func pgDumpPgsBrief() []*pgBriefItem {
 
 func sanitizePgBriefs(pgBriefs []*pgBriefItem) []*pgBriefItem {
 	duplicateMessage := "WARNING: PG %s's %s set has one or more duplicated OSD IDs; this PG will be excluded from operations and reservation calculations. Please check your CRUSH rules and map.\n"
-	sanitized := make([]*pgBriefItem, 0, len(pgBriefs))
+	sanitized := pgBriefs
+	i := 0
 
 	for _, pgBrief := range pgBriefs {
 		if len(pgBrief.Up) != len(pgBrief.Acting) {
@@ -424,25 +443,23 @@ func sanitizePgBriefs(pgBriefs []*pgBriefItem) []*pgBriefItem {
 			continue
 		}
 
-		sanitized = append(sanitized, pgBrief)
+		sanitized[i] = pgBrief
+		i++
 	}
 
-	return sanitized
+	return sanitized[:i]
 }
 
 func hasDuplicateOSDID(osdids []int) bool {
-	for i, osdid := range osdids {
+	seen := make(map[int]struct{}, len(osdids))
+	for _, osdid := range osdids {
 		if osdid == invalidOSD {
 			continue
 		}
-		for j, otherOSDID := range osdids {
-			if i == j {
-				continue
-			}
-			if osdid == otherOSDID {
-				return true
-			}
+		if _, ok := seen[osdid]; ok {
+			return true
 		}
+		seen[osdid] = struct{}{}
 	}
 	return false
 }
@@ -454,16 +471,27 @@ func hasDuplicateOSDID(osdids []int) bool {
 // matters and won't change, but for replicated pools the order can
 // change and this doesn't imply data movement.
 func reorderUpToMatchActing(pgid string, up, acting []int, useUpmap bool) {
+	reorderUpToMatchActingWithContext(pgid, up, acting, useUpmap, nil, nil)
+}
+
+func reorderUpToMatchActingWithContext(pgid string, up, acting []int, useUpmap bool, pools *poolsDetails, upmapItemsByPg map[string]*pgUpmapItem) {
 	// Do not reorder if the PG belongs to an Erasure-Coded pool,
 	// since order DOES matter and will trigger backfills.
-	pools := osdPoolDetails()
+	if pools == nil {
+		pools = osdPoolDetails()
+	}
 	if pools.PgUsesEC(pgid) {
 		return
 	}
 
-	mappings := make(map[int]int)
+	// Keep nil unless we actually have upmap entries for this PG.
+	// Lookups on a nil map are safe and return (zero, false).
+	var mappings map[int]int
 	if useUpmap {
-		if pui, ok := pgUpmapItemMap()[pgid]; ok {
+		if upmapItemsByPg == nil {
+			upmapItemsByPg = pgUpmapItemMap()
+		}
+		if pui, ok := upmapItemsByPg[pgid]; ok {
 			mappings = pui.mappingsAsToFromMap()
 		}
 	}
@@ -512,13 +540,19 @@ func osdDump() *osdDumpOut {
 
 func pgUpmapItemMap() map[string]*pgUpmapItem {
 	osdDumpOut := osdDump()
+	if savedPgUpmapItemMap != nil && savedPgUpmapItemMapSource == osdDumpOut {
+		return savedPgUpmapItemMap
+	}
 
-	puis := make(map[string]*pgUpmapItem)
+	puis := make(map[string]*pgUpmapItem, len(osdDumpOut.PgUpmapItems))
 	for _, pui := range osdDumpOut.PgUpmapItems {
 		puis[pui.PgID] = pui
 	}
 
-	return puis
+	savedPgUpmapItemMap = puis
+	savedPgUpmapItemMapSource = osdDumpOut
+
+	return savedPgUpmapItemMap
 }
 
 var savedParsedOsdTree *parsedOsdTree
@@ -581,11 +615,13 @@ func osdPoolDetails() *poolsDetails {
 	mustParseCephCommand(jsonOut, err, &pools)
 
 	poolsMap = make(map[int]*osdPoolDetail)
+	usesEC := make(map[int]bool, len(pools))
 	for _, pool := range pools {
 		poolsMap[pool.ID] = pool
+		usesEC[pool.ID] = pool.ECProfile != ""
 	}
 
-	savedOsdPoolsDetails = &poolsDetails{Pools: poolsMap}
+	savedOsdPoolsDetails = &poolsDetails{Pools: poolsMap, UsesEC: usesEC}
 	return savedOsdPoolsDetails
 }
 
@@ -609,7 +645,16 @@ func crushCmp(fp string) ([]pgMapping, error) {
 		panic(err)
 	}
 
-	mappings := make([]pgMapping, 0, len(puis))
+	mappingCount := 0
+	for _, pui := range puis {
+		for _, m := range pui.Mappings {
+			if m.From != m.To {
+				mappingCount++
+			}
+		}
+	}
+
+	mappings := make([]pgMapping, 0, mappingCount)
 	for _, pui := range puis {
 		for _, m := range pui.Mappings {
 			if m.From == m.To {
@@ -631,9 +676,19 @@ func crushCmp(fp string) ([]pgMapping, error) {
 
 func parseCrushDiff(in string) ([]*pgUpmapItem, error) {
 	var (
-		sc     = bufio.NewScanner(strings.NewReader(in))
-		puiMap = make(map[string]*pgUpmapItem)
+		sc = bufio.NewScanner(strings.NewReader(in))
 	)
+	// Most mapping lines are one-per-line in crushdiff output. Pre-sizing to
+	// newline count keeps this slice in a mostly single allocation.
+	estimate := max(strings.Count(in, "\n"), 1)
+	type parsedPGRemap struct {
+		seq int
+		pui *pgUpmapItem
+	}
+	parsed := make([]parsedPGRemap, 0, estimate)
+	seq := 0
+	monotonicByPGID := true
+	lastPGID := ""
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -651,80 +706,119 @@ func parseCrushDiff(in string) ([]*pgUpmapItem, error) {
 			return nil, errors.Wrap(err, "could not parse PG mapping entry")
 		}
 
-		puiMap[pui.PgID] = pui
+		parsed = append(parsed, parsedPGRemap{seq: seq, pui: pui})
+		if lastPGID != "" && strings.Compare(lastPGID, pui.PgID) > 0 {
+			monotonicByPGID = false
+		}
+		lastPGID = pui.PgID
+		seq++
 	}
 
 	if err := sc.Err(); err != nil {
 		return nil, errors.Wrap(err, "failed scanning crushmap")
 	}
 
-	puis := make([]*pgUpmapItem, 0, len(puiMap))
-	for _, pui := range puiMap {
-		puis = append(puis, pui)
+	// Sort first by PG ID, then by input sequence so duplicate PG IDs keep
+	// deterministic order and can be deduplicated with "last one wins".
+	if !monotonicByPGID {
+		slices.SortFunc(parsed, func(a, b parsedPGRemap) int {
+			if c := strings.Compare(a.pui.PgID, b.pui.PgID); c != 0 {
+				return c
+			}
+			return a.seq - b.seq
+		})
 	}
 
-	sort.Slice(puis, func(i, j int) bool { return puis[i].PgID < puis[j].PgID })
+	puis := make([]*pgUpmapItem, 0, len(parsed))
+	for i := 0; i < len(parsed); {
+		j := i + 1
+		for j < len(parsed) && parsed[j].pui.PgID == parsed[i].pui.PgID {
+			j++
+		}
+		// Preserve existing semantics: when duplicate PG IDs appear, keep
+		// the last parsed entry.
+		puis = append(puis, parsed[j-1].pui)
+		i = j
+	}
+
 	return puis, nil
 }
 
 func parsePGRemapEntry(entry string) (*pgUpmapItem, error) {
-	parts := strings.Fields(entry)
-
-	// We expect at minimum the PG mapping entry should contain 4
-	// separate sections. For e.g.:
-	//
-	// 1.0 [3] -> [3]
-	if len(parts) < 4 {
+	// Extract PGID: everything before the first whitespace character.
+	sep := strings.IndexAny(entry, " \t")
+	if sep <= 0 {
 		return nil, fmt.Errorf("incomplete PG mapping entry: %q", entry)
 	}
+	pgID := entry[:sep]
+	rest := entry[sep+1:]
 
-	// There should also be even number of elements in the remapping entry.
-	if len(parts)%2 != 0 {
-		return nil, fmt.Errorf("invalid PG mapping entry: %q", entry)
+	// Split on "->": left-hand side is the existing OSD set, right-hand side is the new one.
+	before, after, ok := strings.Cut(rest, "->")
+	if !ok {
+		return nil, fmt.Errorf("incomplete PG mapping entry: %q", entry)
 	}
+	lhs := before
+	rhs := after
 
-	var (
-		pgID   = parts[0]
-		eM, nM = make([]int, 0, len(parts)/2), make([]int, 0, len(parts)/2)
-		nMM    bool
-	)
-	for _, part := range parts[1:] {
-		if part == "->" {
-			nMM = true
-			continue
+	// Scan lhs and rhs inline: skip non-digit characters and consume digit runs.
+	// This avoids the string splitting and trimming allocations of strings.Fields
+	// and strings.Trim.
+	mappings := make([]mapping, 0, 4)
+	for s := lhs; len(s) > 0; {
+		for len(s) > 0 && (s[0] < '0' || s[0] > '9') {
+			s = s[1:]
 		}
-
-		part = strings.Trim(part, "[],")
-
-		id, err := strconv.Atoi(part)
+		if len(s) == 0 {
+			break
+		}
+		end := 0
+		for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+			end++
+		}
+		id, err := strconv.Atoi(s[:end])
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not parse pg mapping entry for %q", entry)
 		}
-
-		if nMM {
-			nM = append(nM, id)
-			continue
-		}
-
-		eM = append(eM, id)
+		mappings = append(mappings, mapping{From: id})
+		s = s[end:]
 	}
 
-	// OSD sets should have the same length for both existing and new ones.
-	if len(eM) != len(nM) {
+	if len(mappings) == 0 {
 		return nil, fmt.Errorf("unequal count between existing and new OSD sets within mapping: %q", entry)
 	}
 
-	enM := make([]mapping, 0, len(nM))
-	for i := range nM {
-		enM = append(enM, mapping{
-			From: eM[i],
-			To:   nM[i],
-		})
+	toIdx := 0
+	for s := rhs; len(s) > 0; {
+		for len(s) > 0 && (s[0] < '0' || s[0] > '9') {
+			s = s[1:]
+		}
+		if len(s) == 0 {
+			break
+		}
+		end := 0
+		for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+			end++
+		}
+		id, err := strconv.Atoi(s[:end])
+		if err != nil {
+			return nil, errors.Wrapf(err, "could not parse pg mapping entry for %q", entry)
+		}
+		if toIdx >= len(mappings) {
+			return nil, fmt.Errorf("unequal count between existing and new OSD sets within mapping: %q", entry)
+		}
+		mappings[toIdx].To = id
+		toIdx++
+		s = s[end:]
+	}
+
+	if toIdx != len(mappings) {
+		return nil, fmt.Errorf("unequal count between existing and new OSD sets within mapping: %q", entry)
 	}
 
 	return &pgUpmapItem{
 		PgID:     pgID,
-		Mappings: enM,
+		Mappings: mappings,
 	}, nil
 }
 
@@ -751,8 +845,16 @@ func parseCephCommand(out string, err error, v any) error {
 // the json spec or the golang parser (though it is apparently allowed by the
 // Python parser), so we convert such cases to "null".
 func handleCephInf(buf []byte) []byte {
-	buf = bytes.ReplaceAll(buf, []byte("\": inf"), []byte("\": null"))
-	buf = bytes.ReplaceAll(buf, []byte("\":inf"), []byte("\":null"))
-
+	// bytes.ReplaceAll always allocates a new buffer, even when the search
+	// pattern is not present. Guard each replacement with a Contains check
+	// so that the common case (no "inf" values) avoids the allocation entirely.
+	for _, pair := range [][2][]byte{
+		{[]byte("\": inf"), []byte("\": null")},
+		{[]byte("\":inf"), []byte("\":null")},
+	} {
+		if bytes.Contains(buf, pair[0]) {
+			buf = bytes.ReplaceAll(buf, pair[0], pair[1])
+		}
+	}
 	return buf
 }
