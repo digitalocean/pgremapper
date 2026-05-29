@@ -17,7 +17,6 @@ package main
 import (
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 
@@ -54,7 +53,7 @@ func updateChangeState(wantedState changeStateType) changeStateType {
 func mustGetCurrentMappingState() *mappingState {
 	osdDumpOut := osdDump()
 	items := osdDumpOut.PgUpmapItems
-	sort.Slice(items, func(i, j int) bool { return items[i].PgID < items[j].PgID })
+	slices.SortFunc(items, func(a, b *pgUpmapItem) int { return strings.Compare(a.PgID, b.PgID) })
 	sanitizeStaleUpmaps(items)
 	return &mappingState{
 		pgUpmapItems: osdDumpOut.PgUpmapItems,
@@ -63,10 +62,25 @@ func mustGetCurrentMappingState() *mappingState {
 }
 
 func sanitizeStaleUpmaps(puis []*pgUpmapItem) {
-	pgBriefs := pgBriefMap()
+	if len(puis) == 0 {
+		return
+	}
 
-	hasOSD := func(osdids []int, osdid int) bool {
-		return slices.Contains(osdids, osdid)
+	// Build a set of only the PGIDs that have upmap items. In a large cluster
+	// there can be tens of thousands of PGs, but only a small fraction will
+	// have upmap entries. Building an index of every PG would over-allocate;
+	// instead we iterate pgDumpPgsBrief() once and keep only the entries we
+	// actually need, keeping the map proportional to the upmap item count.
+	targetPGIDs := make(map[string]struct{}, len(puis))
+	for _, pui := range puis {
+		targetPGIDs[pui.PgID] = struct{}{}
+	}
+
+	pgBriefs := make(map[string]*pgBriefItem, len(targetPGIDs))
+	for _, pgb := range pgDumpPgsBrief() {
+		if _, ok := targetPGIDs[pgb.PgID]; ok {
+			pgBriefs[pgb.PgID] = pgb
+		}
 	}
 
 	for _, pui := range puis {
@@ -75,9 +89,11 @@ func sanitizeStaleUpmaps(puis []*pgUpmapItem) {
 			continue
 		}
 
-		finalMappings := []mapping{}
+		finalMappings := make([]mapping, 0, len(pui.Mappings))
 		for _, m := range pui.Mappings {
-			if hasOSD(pgBrief.Up, m.From) || !hasOSD(pgBrief.Up, m.To) {
+			fromInUp := slices.Contains(pgBrief.Up, m.From)
+			toInUp := slices.Contains(pgBrief.Up, m.To)
+			if fromInUp || !toInUp {
 				// This mapping has no effect on the PG and is
 				// thus stale, but Ceph hasn't cleaned it up.
 				// It will get in the way of our own decision
@@ -116,7 +132,7 @@ func (m *mappingState) tryRemap(pgid string, from, to int) error {
 			// simply remove it.
 			pui.Mappings[i].dirty = true
 			pui.removedMappings = append(pui.removedMappings, pui.Mappings[i])
-			pui.Mappings = append(pui.Mappings[0:i], pui.Mappings[i+1:]...)
+			pui.Mappings = slices.Delete(pui.Mappings, i, i+1)
 			m.bs.accountForRemap(pgid, from, to)
 			return nil
 		}
@@ -148,8 +164,10 @@ func (m *mappingState) mustRemap(pgid string, from, to int) {
 
 func (m *mappingState) findOrMakeUpmapItem(pgid string) *pgUpmapItem {
 	puis := m.pgUpmapItems
-	i := sort.Search(len(puis), func(i int) bool { return m.pgUpmapItems[i].PgID >= pgid })
-	if i < len(puis) && puis[i].PgID == pgid {
+	i, found := slices.BinarySearchFunc(puis, pgid, func(pui *pgUpmapItem, s string) int {
+		return strings.Compare(pui.PgID, s)
+	})
+	if found {
 		return puis[i]
 	}
 
@@ -157,10 +175,7 @@ func (m *mappingState) findOrMakeUpmapItem(pgid string) *pgUpmapItem {
 	pui := &pgUpmapItem{
 		PgID: pgid,
 	}
-	puis = append(puis, &pgUpmapItem{})
-	copy(puis[i+1:], puis[i:])
-	puis[i] = pui
-	m.pgUpmapItems = puis
+	m.pgUpmapItems = slices.Insert(puis, i, pui)
 
 	return pui
 }
@@ -226,7 +241,7 @@ type pgMapping struct {
 }
 
 func (m *mappingState) getMappings(filter mappingFilter) []pgMapping {
-	mappings := []pgMapping{}
+	mappings := make([]pgMapping, 0, len(m.pgUpmapItems))
 
 	m.iterateMappings(func(pgid string, mp mapping) {
 		mappings = append(mappings, pgMapping{
@@ -244,7 +259,7 @@ func (m *mappingState) dirtyUpmapItems() []*pgUpmapItem {
 	m.l.Lock()
 	defer m.l.Unlock()
 
-	items := []*pgUpmapItem{}
+	items := make([]*pgUpmapItem, 0, len(m.pgUpmapItems))
 
 	for _, pui := range m.pgUpmapItems {
 		if pui.dirty {
@@ -276,8 +291,9 @@ func (m *mappingState) apply() {
 }
 
 func (m *mappingState) String() string {
-	strs := []string{}
-	for _, pui := range m.dirtyUpmapItems() {
+	dirty := m.dirtyUpmapItems()
+	strs := make([]string, 0, len(dirty)+1)
+	for _, pui := range dirty {
 		strs = append(strs, pui.String())
 	}
 	if len(strs) > 0 {
