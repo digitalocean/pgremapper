@@ -246,7 +246,7 @@ osdmaptool: osdmap file '/tmp/tmp5ip_axby/osdmap'
 2.0	[4, 5, 8] -> [3, 6]
 		`,
 			items:  nil,
-			errMsg: "could not parse PG mapping entry: invalid PG mapping entry",
+			errMsg: "could not parse PG mapping entry: unequal count between existing and new OSD sets within mapping",
 		},
 		{
 			name: "invalid case with 1 PG with mismatched From set",
@@ -273,7 +273,7 @@ osdmaptool: osdmap file '/tmp/tmp5ip_axby/osdmap'
 2.0	[4, 5] -> [3, 6, 0]
 		`,
 			items:  nil,
-			errMsg: "could not parse PG mapping entry: invalid PG mapping entry",
+			errMsg: "could not parse PG mapping entry: unequal count between existing and new OSD sets within mapping",
 		},
 		{
 			name: "invalid case with 1 PG with both mismatched sets",
@@ -369,6 +369,8 @@ func resetCephStateForCacheTest() {
 	savedOsdPoolsDetails = nil
 	savedParsedOsdTree = nil
 	savedPgDumpPgsBrief = nil
+	savedPgUpmapItemMap = nil
+	savedPgUpmapItemMapSource = nil
 }
 
 func TestPgUpmapItemMapCacheInvalidatesAfterOsdDumpReset(t *testing.T) {
