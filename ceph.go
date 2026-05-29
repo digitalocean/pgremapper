@@ -447,17 +447,6 @@ func hasDuplicateOSDID(osdids []int) bool {
 	return false
 }
 
-func pgBriefMap() map[string]*pgBriefItem {
-	pgBriefs := pgDumpPgsBrief()
-
-	pgBriefMap := make(map[string]*pgBriefItem)
-	for _, pgb := range pgBriefs {
-		pgBriefMap[pgb.PgID] = pgb
-	}
-
-	return pgBriefMap
-}
-
 // Re-order the up list so that any OSDs in it that are also in the
 // acting list are in the same place. We also need to take into account
 // upmap items which create relationships between the up and acting
