@@ -739,11 +739,13 @@ func BenchmarkComputeBackfillSrcsTgts(b *testing.B) {
 		Up:     []int{1, 2, 33, 4, 55, 6},
 		Acting: []int{1, 22, 3, 4, 5, 66},
 	}
+	srcBuf := make([]int, 0, len(pgb.Acting))
+	tgtBuf := make([]int, 0, len(pgb.Acting))
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = computeBackfillSrcsTgts(pgb)
+		_, _ = computeBackfillSrcsTgts(pgb, srcBuf[:0], tgtBuf[:0])
 	}
 }
 
