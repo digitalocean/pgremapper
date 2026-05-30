@@ -27,7 +27,7 @@
 #
 # Environment:
 #   BENCHTIME   minimum time per benchmark (default: 15s)
-#   COUNT       number of timed repetitions (default: 3)
+#   COUNT       number of timed repetitions (default: 6)
 #   BENCH_FILTER  go test -bench regex (default: .)
 #   OUT_DIR     profile output directory (default: profiles)
 #   RESULTS     text benchmark output file (default: bench-results.txt)
@@ -38,7 +38,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 BENCHTIME="${BENCHTIME:-15s}"
-COUNT="${COUNT:-3}"
+COUNT="${COUNT:-6}"
 BENCH_FILTER="${BENCH_FILTER:-.}"
 OUT_DIR="${OUT_DIR:-profiles}"
 RESULTS="${RESULTS:-bench-results.txt}"
@@ -55,7 +55,7 @@ Modes:
 
 Environment variables:
   BENCHTIME       Minimum duration per benchmark (default: 15s)
-  COUNT           Repetitions for timed runs (default: 3)
+  COUNT           Repetitions for timed runs (default: 6)
   BENCH_FILTER    go test -bench regex (default: .)
   OUT_DIR         Directory for profile files (default: profiles)
   RESULTS         File for text benchmark output (default: bench-results.txt)
