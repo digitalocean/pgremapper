@@ -16,7 +16,7 @@ Runs each sub-benchmark in its own `go test` invocation. Text metrics go to `ben
 ./scripts/bench-all.sh
 ```
 
-Defaults: `-benchtime=15s`, `-count=3`, `-benchmem`, all four profile types.
+Defaults: `-benchtime=15s`, `-count=6`, `-benchmem`, all four profile types.
 
 Focus on production-scale fixtures only:
 
@@ -63,7 +63,7 @@ BENCH_FILTER='/(medium|large)$' ./scripts/bench-all.sh --race
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `BENCHTIME` | `15s` | Minimum time per sub-benchmark |
-| `COUNT` | `3` | Timed repetitions (for `ns/op`, `B/op`, `allocs/op` spread) |
+| `COUNT` | `6` | Timed repetitions (for `ns/op`, `B/op`, `allocs/op` spread; benchstat needs ≥4 for `%` lines) |
 | `BENCH_FILTER` | `.` | Passed to `go test -bench` |
 | `OUT_DIR` | `profiles` | Profile output directory |
 | `RESULTS` | `bench-results.txt` | Text benchmark output |
@@ -115,7 +115,23 @@ go install golang.org/x/perf/cmd/benchstat@latest
 benchstat baseline-bench-results.txt bench-results.txt
 ```
 
-Run each pass at least three times (`COUNT=3` by default) and compare medians. Keep machine load low while benchmarking.
+Run each pass at least six times (`COUNT=6` by default) and compare medians. Keep machine load low while benchmarking.
+
+Save gate baselines under `baselines/` (for example `baselines/gate-0-scaffold.txt`) and compare stacked perf work:
+
+```
+benchstat baselines/gate-0-scaffold.txt bench-results.txt
+```
+
+### Compare profiles between gates
+
+[`scripts/pprof-diff.sh`](scripts/pprof-diff.sh) diffs matching `*.prof` files in two directories (delta = NEW minus BASE; negative usually means less work in NEW):
+
+```
+./scripts/pprof-diff.sh 0 5 > pprof.results
+```
+
+Gate ids map to `profiles-gate-N/` when those directories exist. Use the same `BENCH_FILTER` on both runs so filenames overlap. Cumulative `0 → N` is a whole-stack story; adjacent gates (`1 → 2`) isolate a single PR when profiles were captured with the same filter.
 
 ## Inspect profiles with pprof
 

@@ -753,15 +753,16 @@ func BenchmarkComputeBackfillSrcsTgts(b *testing.B) {
 
 func BenchmarkSanitizeStaleUpmaps(b *testing.B) {
 	for _, tt := range []struct {
-		name     string
-		pgCount  int
-		osdCount int
+		name       string
+		pgCount    int
+		osdCount   int
+		upmapCount int
 	}{
-		{name: "small", pgCount: 4096, osdCount: 128},
-		{name: "medium", pgCount: 16384, osdCount: 512},
-		{name: "large", pgCount: 65536, osdCount: 2048},
+		{name: "small", pgCount: 4096, osdCount: 128, upmapCount: 300},
+		{name: "medium", pgCount: 16384, osdCount: 512, upmapCount: 1200},
+		{name: "large", pgCount: 65536, osdCount: 2048, upmapCount: 4800},
 	} {
-		fixture := makeBenchmarkFixture(tt.pgCount, tt.osdCount)
+		fixture := makeBenchmarkFixtureWithUpmaps(tt.pgCount, tt.osdCount, tt.upmapCount)
 
 		b.Run(tt.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -770,21 +771,7 @@ func BenchmarkSanitizeStaleUpmaps(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				resetBenchmarkGlobals()
 				installFixture(fixture)
-
-				puis := make([]*pgUpmapItem, 0, tt.pgCount)
-				for p := range tt.pgCount {
-					pgid := fmt.Sprintf("1.%x", p)
-					puis = append(puis, &pgUpmapItem{
-						PgID: pgid,
-						Mappings: []mapping{
-							{From: p % tt.osdCount, To: (p + 17) % tt.osdCount},
-							{From: (p + 23) % tt.osdCount, To: (p + 31) % tt.osdCount},
-							{From: (p + 29) % tt.osdCount, To: (p + 37) % tt.osdCount},
-						},
-					})
-				}
-
-				sanitizeStaleUpmaps(puis)
+				sanitizeStaleUpmaps(osdDump().PgUpmapItems)
 			}
 		})
 	}
